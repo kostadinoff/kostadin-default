@@ -426,28 +426,23 @@ univariate_plot <- function(data, variable) {
 
 ###### ---Define theme---######
 
-theme_nice <- ggthemes::theme_tufte() +
-  theme(
-    axis.ticks = element_line(linewidth = 0.5, color = "black"),
-    axis.ticks.length = unit(4, "mm"),
-    plot.title = element_text(
-      family = "Roboto Condensed",
-      size = 22,
-      hjust = 0,
-      vjust = 2
-    ),
-    plot.subtitle = element_text(family = "Roboto Condensed", size = 20),
-    plot.caption = element_text(
-      family = "Roboto Condensed",
-      size = 20,
-      hjust = 1
-    ),
-    axis.title = element_text(family = "Roboto Condensed", size = 18),
-    axis.text = element_text(family = "Roboto Condensed", size = 18),
-    axis.text.x = element_text(margin = margin(5, b = 10)),
-    strip.text = element_text(family = "Roboto Condensed", size = 18),
-    axis.line = element_line(),
-  )
+set_plot_font <- function(font_family = "Roboto Condensed") {
+  showtext::showtext_auto()
+  sysfonts::font_add_google(font_family, font_family)
 
-# Set the defined theme as the default theme
-theme_set(theme_nice)
+  theme_nice <- ggthemes::theme_tufte() +
+    theme(
+      axis.ticks = element_line(linewidth = 0.5, color = "black"),
+      axis.ticks.length = unit(4, "mm"),
+      plot.title = element_text(family = font_family, size = 22, hjust = 0, vjust = 2),
+      plot.subtitle = element_text(family = font_family, size = 20),
+      plot.caption = element_text(family = font_family, size = 20, hjust = 1),
+      axis.title = element_text(family = font_family, size = 18),
+      axis.text = element_text(family = font_family, size = 18),
+      axis.text.x = element_text(margin = margin(5, b = 10)),
+      strip.text = element_text(family = font_family, size = 18),
+      axis.line = element_line()
+    )
+
+  theme_set(theme_nice)
+}
