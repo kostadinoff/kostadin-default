@@ -1,33 +1,20 @@
 ###### ---Libraries---######
-library(tidyverse)
-library(haven)
-library(modelsummary)
-library(MKinfer)
-library(rstatix)
-library(finalfit)
-library(tinytable)
-library(monochromeR)
-library(ggstats)
-library(epitools)
-library(ggsurvfit)
-library(broom)
-library(rstan)
-library(brms)
-library(gtsummary)
-library(quantreg)
-library(patchwork)
-library(tidymodels)
-library(gt)
-library(epiR)
-library(readxl)
-library(scales)
-library(marginaleffects)
-library(ggthemes)
-library(emmeans)
-library(janitor)
-library(easystats)
-library(showtext)
-library(sysfonts)
+
+packages <- c(
+  "tidyverse", "haven", "modelsummary", "MKinfer", "rstatix", "finalfit",
+  "tinytable", "monochromeR", "ggstats", "epitools", "ggsurvfit", "broom",
+  "rstan", "brms", "gtsummary", "quantreg", "patchwork", "tidymodels", "gt",
+  "epiR", "readxl", "scales", "marginaleffects", "ggthemes", "emmeans",
+  "janitor", "easystats", "showtext", "sysfonts"
+)
+
+lapply(packages, function(pkg) {
+  if (!require(pkg, character.only = TRUE)) {
+    install.packages(pkg, dependencies = TRUE)
+    library(pkg, character.only = TRUE)
+  }
+})
+
 
 ###### ---Options---######
 
