@@ -1,34 +1,24 @@
 ###### ---Libraries---######
 
-packages <- c(
-  "tidyverse", "haven", "modelsummary", "MKinfer", "rstatix", "finalfit",
-  "tinytable", "monochromeR", "ggstats", "epitools", "ggsurvfit", "broom",
-  "rstan", "brms", "gtsummary", "quantreg", "patchwork", "tidymodels", "gt",
-  "epiR", "readxl", "scales", "marginaleffects", "ggthemes", "emmeans",
-  "janitor", "easystats", "showtext", "sysfonts"
-)
-
-lapply(packages, function(pkg) {
-  if (!require(pkg, character.only = TRUE)) {
-    install.packages(pkg, dependencies = TRUE)
-    library(pkg, character.only = TRUE)
-  }
-})
-
+if (!require(pacman)) install.packages("pacman")
+pacman::p_load(tidyverse, haven, modelsummary, MKinfer, rstatix, finalfit, tinytable, monochromeR, ggstats, epitools, ggsurvfit, broom, rstan, brms, gtsummary, quantreg, patchwork, tidymodels, gt, epiR, readxl, scales, marginaleffects, ggthemes, emmeans, janitor, easystats, showtext, brglm2, sysfonts, MASS, detectseparation)
 
 ###### ---Options---######
 
 options(brms.backend = "cmdstanr")
 options(mc.cores = parallel::detectCores())
 options(ggplot2.messages = FALSE)
-
+options(dplyr.width = Inf) 
 ###### ---Functions---######
 
 # Function to round numeric columns in a tibble
 
 mutate_round <- function(data, digits = 2) {
-  data %>%
-    mutate(across(where(is.numeric), ~ janitor::round_half_up(., digits)))
+  if (!is.data.frame(data)) {
+    stop("Input must be a data frame or tibble.")
+  }
+  data |> 
+  dplyr::mutate(across(where(is.numeric), ~ janitor::round_half_up(., digits)))
 }
 
 # Function to calculate confidence intervals for proportions
@@ -411,10 +401,84 @@ univariate_plot <- function(data, variable) {
   }
 }
 
+
+
+# Define the function
+kosta_regression <- function(data, outcome, predictors) {
+  
+  # Capture outcome as symbol
+  outcome <- rlang::ensym(outcome)
+  
+  # Ensure predictors are character names
+  predictor_names <- as.character(predictors)
+  
+  # Determine the type of outcome variable
+  outcome_type <- case_when(
+    is.factor(data[[rlang::as_name(outcome)]]) && nlevels(data[[rlang::as_name(outcome)]]) == 2 ~ "binary",
+    is.ordered(data[[rlang::as_name(outcome)]]) ~ "ordinal",
+    is.numeric(data[[rlang::as_name(outcome)]]) ~ "continuous",
+    TRUE ~ NA_character_
+  )
+  
+  if (is.na(outcome_type)) {
+    stop("Outcome must be numeric, binary factor, or ordinal factor.")
+  }
+  
+  # Function to fit a model
+  fit_model <- function(formula) {
+    if (outcome_type == "binary") {
+      y <- data[[rlang::as_name(outcome)]]
+      x <- model.matrix(formula, data = data)
+      
+      # Check for separation
+      separation_result <- tryCatch(
+        detect_separation(y = y, x = x, family = binomial()),
+        error = function(e) NULL
+      )
+      
+      if (!is.null(separation_result) && !is.null(separation_result$separation) && separation_result$separation) {
+        warning("Separation detected. Using Firth's logistic regression.")
+        return(brglm2::brglm(formula, data = data, family = binomial()))
+      } else {
+        return(glm(formula, data = data, family = binomial()))
+      }
+      
+    } else if (outcome_type == "ordinal") {
+      return(MASS::polr(formula, data = data, Hess = TRUE))
+      
+    } else if (outcome_type == "continuous") {
+      return(lm(formula, data = data))
+    }
+  }
+  
+  # Fit models for each predictor separately (univariate & multivariate)
+  results <- map_dfr(predictor_names, function(predictor) {
+    
+    # Univariate model
+    univariate_formula <- as.formula(paste(rlang::as_name(outcome), "~", predictor))
+    univariate_model <- fit_model(univariate_formula)
+    univariate_results <- broom::tidy(univariate_model, conf.int = TRUE, exponentiate = (outcome_type == "binary")) %>%
+      mutate(model_type = "univariate", predictor = predictor, outcome_type = outcome_type)
+    
+    # Multivariate model (this predictor adjusted for all others)
+    other_predictors <- setdiff(predictor_names, predictor)  # Remove current predictor
+    multivariate_formula <- as.formula(paste(rlang::as_name(outcome), "~", predictor, "+", paste(other_predictors, collapse = " + ")))
+    multivariate_model <- fit_model(multivariate_formula)
+    multivariate_results <- broom::tidy(multivariate_model, conf.int = TRUE, exponentiate = (outcome_type == "binary")) %>%
+      mutate(model_type = "multivariate", predictor = predictor, outcome_type = outcome_type)
+    
+    # Combine results
+    bind_rows(univariate_results, multivariate_results)
+  })
+  
+  return(results)
+}
+
 ###### ---Define theme---######
 set_plot_font <- function(font = "Roboto Condensed", size = 18) {
   showtext::showtext_auto()
   sysfonts::font_add_google(font, font)
+
 
   # Define relative font sizes based on the `size` parameter
   title_size <- size + 4
@@ -440,4 +504,5 @@ set_plot_font <- function(font = "Roboto Condensed", size = 18) {
 
   theme_set(theme_nice)
 }
+
 set_plot_font()
