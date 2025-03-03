@@ -460,65 +460,6 @@ kk_reg <- function(data, outcome, predictors, log_outcome = FALSE, custom_formul
     }
   }
 
-  # Function to calculate diagnostics
-  calculate_diagnostics <- function(model) {
-    diagnostics <- list()
-
-    if (outcome_type == "continuous") {
-      # Diagnostics for linear regression
-      summary_model <- summary(model)
-      diagnostics$r_squared <- summary_model$r.squared
-      diagnostics$adj_r_squared <- summary_model$adj.r.squared
-      diagnostics$residual_std_error <- summary_model$sigma
-    } else if (outcome_type == "binary") {
-      # Diagnostics for logistic regression
-      null_model <- update(model, ~1) # Null model with only intercept
-      loglik_model <- logLik(model)
-      loglik_null <- logLik(null_model)
-
-      # McFadden's Pseudo R-squared
-      diagnostics$pseudo_r_squared <- 1 - (loglik_model / loglik_null)
-
-      # Nagelkerke's Pseudo R-squared
-      diagnostics$nagelkerke_r_squared <- (1 - exp(-2 * (loglik_model - loglik_null))) / (1 - exp(2 * loglik_null / nrow(data)))
-
-      # Hosmer-Lemeshow Test
-      if (requireNamespace("ResourceSelection", quietly = TRUE)) {
-        hoslem_test <- ResourceSelection::hoslem.test(model$y, fitted(model), g = 10)
-        diagnostics$hosmer_lemeshow <- list(
-          statistic = hoslem_test$statistic,
-          p_value = hoslem_test$p.value
-        )
-      }
-
-      # AUC-ROC
-      if (requireNamespace("pROC", quietly = TRUE)) {
-        roc_curve <- pROC::roc(model$y, fitted(model))
-        diagnostics$auc_roc <- pROC::auc(roc_curve)
-      }
-    } else if (outcome_type == "ordinal") {
-      # Diagnostics for ordinal regression
-      null_model <- update(model, ~1) # Null model with only intercept
-      loglik_model <- logLik(model)
-      loglik_null <- logLik(null_model)
-
-      # McFadden's Pseudo R-squared
-      diagnostics$pseudo_r_squared <- 1 - (loglik_model / loglik_null)
-
-      # Nagelkerke's Pseudo R-squared
-      diagnostics$nagelkerke_r_squared <- (1 - exp(-2 * (loglik_model - loglik_null))) / (1 - exp(2 * loglik_null / nrow(data)))
-
-      # Likelihood Ratio Test
-      lrtest <- anova(null_model, model)
-      diagnostics$lrtest <- list(
-        statistic = lrtest$Chisq[2],
-        p_value = lrtest$`Pr(>Chi)`[2]
-      )
-    }
-
-    return(diagnostics)
-  }
-
   # Function to process model output
   process_results <- function(model, model_type) {
     results <- broom::tidy(model, conf.int = TRUE) %>%
@@ -529,10 +470,38 @@ kk_reg <- function(data, outcome, predictors, log_outcome = FALSE, custom_formul
         BIC = BIC(model)
       )
 
-    # Add diagnostics
-    diagnostics <- calculate_diagnostics(model)
-    results <- results %>%
-      bind_cols(as_tibble(diagnostics))
+    if (outcome_type == "binary") {
+      # Convert to odds ratios (OR) for logistic regression
+      results <- results %>%
+        mutate(
+          estimate = exp(estimate), # Odds ratio for logistic regression
+          conf.low = exp(conf.low), # Confidence interval for OR
+          conf.high = exp(conf.high),
+          percent_change = (estimate - 1) * 100, # Percentage change for OR
+          percent_change_low = (conf.low - 1) * 100, # Lower CI for percentage change
+          percent_change_high = (conf.high - 1) * 100 # Upper CI for percentage change
+        )
+    } else if (outcome_type == "continuous" && log_outcome) {
+      # Convert to percentage change if linear regression with log outcome
+      results <- results %>%
+        mutate(
+          percent_change = (exp(estimate) - 1) * 100,
+          percent_change_low = (exp(conf.low) - 1) * 100,
+          percent_change_high = (exp(conf.high) - 1) * 100
+        )
+    } else if (outcome_type == "continuous") {
+      # Calculate percentage change for continuous (no log transformation)
+      results <- results %>%
+        mutate(
+          percent_change = estimate * 100, # Simple percentage change for continuous variable
+          percent_change_low = conf.low * 100,
+          percent_change_high = conf.high * 100
+        )
+    } else {
+      # No transformation for normal linear regression
+      results <- results %>%
+        mutate(percent_change = NA, percent_change_low = NA, percent_change_high = NA)
+    }
 
     return(results)
   }
