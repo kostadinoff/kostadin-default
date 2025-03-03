@@ -8,7 +8,7 @@ pacman::p_load(tidyverse, haven, modelsummary, MKinfer, rstatix, finalfit, tinyt
 options(brms.backend = "cmdstanr")
 options(mc.cores = parallel::detectCores())
 options(ggplot2.messages = FALSE)
-options(dplyr.width = Inf) 
+options(dplyr.width = Inf)
 ###### ---Functions---######
 
 # Function to round numeric columns in a tibble
@@ -17,8 +17,8 @@ mutate_round <- function(data, digits = 2) {
   if (!is.data.frame(data)) {
     stop("Input must be a data frame or tibble.")
   }
-  data |> 
-  dplyr::mutate(across(where(is.numeric), ~ janitor::round_half_up(., digits)))
+  data |>
+    dplyr::mutate(across(where(is.numeric), ~ janitor::round_half_up(., digits)))
 }
 
 # Function to calculate confidence intervals for proportions
@@ -401,78 +401,165 @@ univariate_plot <- function(data, variable) {
   }
 }
 
+# Function for regression
 
+kk_reg <- function(data, outcome, predictors, log_outcome = FALSE, custom_formula = NULL, ...) {
+  # Validate inputs
+  if (!is.data.frame(data)) {
+    stop("`data` must be a data frame.")
+  }
+  if (!rlang::is_string(outcome)) {
+    stop("`outcome` must be a character string.")
+  }
+  if (!is.character(predictors)) {
+    stop("`predictors` must be a character vector.")
+  }
+  if (!is.logical(log_outcome)) {
+    stop("`log_outcome` must be a logical value (TRUE or FALSE).")
+  }
 
-# Define the function
-kosta_regression <- function(data, outcome, predictors) {
-  
   # Capture outcome as symbol
   outcome <- rlang::ensym(outcome)
-  
-  # Ensure predictors are character names
-  predictor_names <- as.character(predictors)
-  
+
+  # Ensure outcome exists in the data
+  if (!rlang::as_name(outcome) %in% colnames(data)) {
+    stop("Outcome variable '", rlang::as_name(outcome), "' not found in the data.")
+  }
+
+  # Ensure predictors exist in the data
+  missing_predictors <- setdiff(predictors, colnames(data))
+  if (length(missing_predictors) > 0) {
+    stop("Predictor variable(s) not found in the data: ", paste(missing_predictors, collapse = ", "))
+  }
+
+  # If log_outcome is TRUE, transform the outcome variable
+  if (log_outcome) {
+    data <- data %>% mutate(!!outcome := log(!!outcome))
+  }
+
   # Determine the type of outcome variable
   outcome_type <- case_when(
-    is.factor(data[[rlang::as_name(outcome)]]) && nlevels(data[[rlang::as_name(outcome)]]) == 2 ~ "binary",
-    is.ordered(data[[rlang::as_name(outcome)]]) ~ "ordinal",
-    is.numeric(data[[rlang::as_name(outcome)]]) ~ "continuous",
+    is.factor(data[[rlang::as_name(outcome)]]) && nlevels(data[[rlang::as_name(outcome)]]) == 2 ~ "binary", # Binary outcome
+    is.ordered(data[[rlang::as_name(outcome)]]) ~ "ordinal", # Ordinal outcome
+    is.numeric(data[[rlang::as_name(outcome)]]) ~ "continuous", # Continuous outcome
     TRUE ~ NA_character_
   )
-  
+
   if (is.na(outcome_type)) {
     stop("Outcome must be numeric, binary factor, or ordinal factor.")
   }
-  
+
   # Function to fit a model
   fit_model <- function(formula) {
     if (outcome_type == "binary") {
-      y <- data[[rlang::as_name(outcome)]]
-      x <- model.matrix(formula, data = data)
-      
-      # Check for separation
-      separation_result <- tryCatch(
-        detect_separation(y = y, x = x, family = binomial()),
-        error = function(e) NULL
-      )
-      
-      if (!is.null(separation_result) && !is.null(separation_result$separation) && separation_result$separation) {
-        warning("Separation detected. Using Firth's logistic regression.")
-        return(brglm2::brglm(formula, data = data, family = binomial()))
-      } else {
-        return(glm(formula, data = data, family = binomial()))
-      }
-      
+      return(glm(formula, data = data, family = binomial(), ...)) # Logistic regression for binary outcome
     } else if (outcome_type == "ordinal") {
-      return(MASS::polr(formula, data = data, Hess = TRUE))
-      
+      return(MASS::polr(formula, data = data, Hess = TRUE, ...)) # Ordinal regression
     } else if (outcome_type == "continuous") {
-      return(lm(formula, data = data))
+      return(lm(formula, data = data, ...)) # Linear regression for continuous outcome
     }
   }
-  
-  # Fit models for each predictor separately (univariate & multivariate)
-  results <- map_dfr(predictor_names, function(predictor) {
-    
-    # Univariate model
-    univariate_formula <- as.formula(paste(rlang::as_name(outcome), "~", predictor))
-    univariate_model <- fit_model(univariate_formula)
-    univariate_results <- broom::tidy(univariate_model, conf.int = TRUE, exponentiate = (outcome_type == "binary")) %>%
-      mutate(model_type = "univariate", predictor = predictor, outcome_type = outcome_type)
-    
-    # Multivariate model (this predictor adjusted for all others)
-    other_predictors <- setdiff(predictor_names, predictor)  # Remove current predictor
-    multivariate_formula <- as.formula(paste(rlang::as_name(outcome), "~", predictor, "+", paste(other_predictors, collapse = " + ")))
-    multivariate_model <- fit_model(multivariate_formula)
-    multivariate_results <- broom::tidy(multivariate_model, conf.int = TRUE, exponentiate = (outcome_type == "binary")) %>%
-      mutate(model_type = "multivariate", predictor = predictor, outcome_type = outcome_type)
-    
-    # Combine results
-    bind_rows(univariate_results, multivariate_results)
+
+  # Function to calculate diagnostics
+  calculate_diagnostics <- function(model) {
+    diagnostics <- list()
+
+    if (outcome_type == "continuous") {
+      # Diagnostics for linear regression
+      summary_model <- summary(model)
+      diagnostics$r_squared <- summary_model$r.squared
+      diagnostics$adj_r_squared <- summary_model$adj.r.squared
+      diagnostics$residual_std_error <- summary_model$sigma
+    } else if (outcome_type == "binary") {
+      # Diagnostics for logistic regression
+      null_model <- update(model, ~1) # Null model with only intercept
+      loglik_model <- logLik(model)
+      loglik_null <- logLik(null_model)
+
+      # McFadden's Pseudo R-squared
+      diagnostics$pseudo_r_squared <- 1 - (loglik_model / loglik_null)
+
+      # Nagelkerke's Pseudo R-squared
+      diagnostics$nagelkerke_r_squared <- (1 - exp(-2 * (loglik_model - loglik_null))) / (1 - exp(2 * loglik_null / nrow(data)))
+
+      # Hosmer-Lemeshow Test
+      if (requireNamespace("ResourceSelection", quietly = TRUE)) {
+        hoslem_test <- ResourceSelection::hoslem.test(model$y, fitted(model), g = 10)
+        diagnostics$hosmer_lemeshow <- list(
+          statistic = hoslem_test$statistic,
+          p_value = hoslem_test$p.value
+        )
+      }
+
+      # AUC-ROC
+      if (requireNamespace("pROC", quietly = TRUE)) {
+        roc_curve <- pROC::roc(model$y, fitted(model))
+        diagnostics$auc_roc <- pROC::auc(roc_curve)
+      }
+    } else if (outcome_type == "ordinal") {
+      # Diagnostics for ordinal regression
+      null_model <- update(model, ~1) # Null model with only intercept
+      loglik_model <- logLik(model)
+      loglik_null <- logLik(null_model)
+
+      # McFadden's Pseudo R-squared
+      diagnostics$pseudo_r_squared <- 1 - (loglik_model / loglik_null)
+
+      # Nagelkerke's Pseudo R-squared
+      diagnostics$nagelkerke_r_squared <- (1 - exp(-2 * (loglik_model - loglik_null))) / (1 - exp(2 * loglik_null / nrow(data)))
+
+      # Likelihood Ratio Test
+      lrtest <- anova(null_model, model)
+      diagnostics$lrtest <- list(
+        statistic = lrtest$Chisq[2],
+        p_value = lrtest$`Pr(>Chi)`[2]
+      )
+    }
+
+    return(diagnostics)
+  }
+
+  # Function to process model output
+  process_results <- function(model, model_type) {
+    results <- broom::tidy(model, conf.int = TRUE) %>%
+      mutate(
+        model_type = model_type,
+        outcome_type = outcome_type,
+        AIC = AIC(model),
+        BIC = BIC(model)
+      )
+
+    # Add diagnostics
+    diagnostics <- calculate_diagnostics(model)
+    results <- results %>%
+      bind_cols(as_tibble(diagnostics))
+
+    return(results)
+  }
+
+  # Fit univariate models
+  univariate_results <- map_dfr(predictors, function(predictor) {
+    formula <- as.formula(paste(rlang::as_name(outcome), "~", predictor))
+    model <- fit_model(formula)
+    process_results(model, "univariate") %>%
+      mutate(predictor = predictor)
   })
-  
+
+  # Fit multivariate model
+  if (is.null(custom_formula)) {
+    multivariate_formula <- as.formula(paste(rlang::as_name(outcome), "~", paste(predictors, collapse = " + ")))
+  } else {
+    multivariate_formula <- custom_formula
+  }
+  multivariate_model <- fit_model(multivariate_formula)
+  multivariate_results <- process_results(multivariate_model, "multivariate")
+
+  # Combine results
+  results <- bind_rows(univariate_results, multivariate_results)
+
   return(results)
 }
+
 
 ###### ---Define theme---######
 set_plot_font <- function(font = "Roboto Condensed", size = 18) {
