@@ -528,6 +528,173 @@ kk_reg <- function(data, outcome, predictors, log_outcome = FALSE, custom_formul
 
   return(results)
 }
+# Additional function for regression
+
+krk_reg <- function(data, outcome, predictors, log_outcome = FALSE, custom_formula = NULL, include_diagnostics = TRUE, ...) {
+  # Load required packages
+  library(dplyr)
+  library(rlang)
+  library(broom)
+  library(purrr)
+
+  # Validate inputs
+  if (!is.data.frame(data)) stop("`data` must be a data frame.")
+  if (!is_string(outcome)) stop("`outcome` must be a character string.")
+  if (!is.character(predictors)) stop("`predictors` must be a character vector.")
+  if (!is.logical(log_outcome)) stop("`log_outcome` must be a logical value (TRUE or FALSE).")
+  if (!is.logical(include_diagnostics)) stop("`include_diagnostics` must be a logical value.")
+
+  # Capture outcome as symbol
+  outcome <- ensym(outcome)
+  outcome_name <- as_name(outcome)
+
+  # Check if outcome exists
+  if (!outcome_name %in% colnames(data)) {
+    stop("Outcome variable '", outcome_name, "' not found in the data.")
+  }
+
+  # Check if predictors exist
+  missing_predictors <- setdiff(predictors, colnames(data))
+  if (length(missing_predictors) > 0) {
+    stop("Predictor variable(s) not found in the data: ", paste(missing_predictors, collapse = ", "))
+  }
+
+  # Transform outcome if log_outcome is TRUE
+  if (log_outcome) {
+    if (!is.numeric(data[[outcome_name]]) || any(data[[outcome_name]] <= 0, na.rm = TRUE)) {
+      stop("`log_outcome = TRUE` requires a positive numeric outcome.")
+    }
+    data <- data %>% mutate(!!outcome := log(!!outcome))
+  }
+
+  # Determine outcome type
+  outcome_type <- case_when(
+    is.factor(data[[outcome_name]]) && nlevels(data[[outcome_name]]) == 2 ~ "binary",
+    is.ordered(data[[outcome_name]]) ~ "ordinal",
+    is.numeric(data[[outcome_name]]) ~ "continuous",
+    TRUE ~ NA_character_
+  )
+  if (is.na(outcome_type)) stop("Outcome must be numeric, binary factor, or ordered factor.")
+
+  # Function to fit a model
+  fit_model <- function(formula) {
+    tryCatch(
+      {
+        if (outcome_type == "binary") {
+          glm(formula, data = data, family = binomial(), ...)
+        } else if (outcome_type == "ordinal") {
+          if (!requireNamespace("MASS", quietly = TRUE)) stop("Package 'MASS' required for ordinal regression.")
+          MASS::polr(formula, data = data, Hess = TRUE, ...)
+        } else if (outcome_type == "continuous") {
+          lm(formula, data = data, ...)
+        }
+      },
+      error = function(e) {
+        stop("Model fitting failed: ", e$message)
+      }
+    )
+  }
+
+  # Function to calculate diagnostics (optional)
+  calculate_diagnostics <- function(model) {
+    if (!include_diagnostics) {
+      return(tibble())
+    }
+
+    diagnostics <- list()
+    if (outcome_type == "continuous") {
+      summary_model <- summary(model)
+      diagnostics$r_squared <- summary_model$r.squared
+      diagnostics$adj_r_squared <- summary_model$adj.r.squared
+      diagnostics$residual_std_error <- summary_model$sigma
+    } else if (outcome_type == "binary") {
+      null_model <- update(model, ~1)
+      loglik_model <- as.numeric(logLik(model))
+      loglik_null <- as.numeric(logLik(null_model))
+      diagnostics$pseudo_r_squared <- as.numeric(1 - (loglik_model / loglik_null))
+      diagnostics$nagelkerke_r_squared <- as.numeric((1 - exp(-2 * (loglik_model - loglik_null))) /
+        (1 - exp(2 * loglik_null / nrow(data))))
+      if (requireNamespace("pROC", quietly = TRUE)) {
+        roc_curve <- pROC::roc(model$y, fitted(model), quiet = TRUE)
+        diagnostics$auc_roc <- as.numeric(pROC::auc(roc_curve))
+      }
+    } else if (outcome_type == "ordinal") {
+      null_model <- update(model, ~1)
+      loglik_model <- as.numeric(logLik(model))
+      loglik_null <- as.numeric(logLik(null_model))
+      diagnostics$pseudo_r_squared <- as.numeric(1 - (loglik_model / loglik_null))
+      diagnostics$nagelkerke_r_squared <- as.numeric((1 - exp(-2 * (loglik_model - loglik_null))) /
+        (1 - exp(2 * loglik_null / nrow(data))))
+    }
+    as_tibble(diagnostics)
+  }
+
+  # Function to process model output
+  process_results <- function(model, model_type) {
+    # Define estimate label based on outcome_type and log_outcome (scalar)
+    estimate_label <- if (outcome_type == "binary") {
+      "odds_ratio"
+    } else if (outcome_type == "continuous" && log_outcome) {
+      "exp_coef"
+    } else if (outcome_type == "ordinal") {
+      "odds_ratio"
+    } else {
+      "coef"
+    }
+
+    results <- broom::tidy(model, conf.int = TRUE) %>%
+      mutate(
+        model_type = model_type,
+        outcome_type = outcome_type,
+        AIC = AIC(model),
+        BIC = BIC(model),
+        estimate_label = estimate_label,
+        coef.type = if_else(grepl("\\|", term), "scale", "coefficient") # Distinguish thresholds
+      )
+
+    # Apply transformations based on outcome type
+    if (outcome_type %in% c("binary", "ordinal") || (outcome_type == "continuous" && log_outcome)) {
+      results <- results %>%
+        mutate(
+          estimate = if_else(coef.type == "coefficient", exp(estimate), estimate),
+          conf.low = if_else(coef.type == "coefficient", exp(conf.low), conf.low),
+          conf.high = if_else(coef.type == "coefficient", exp(conf.high), conf.high),
+          percent_change = if_else(coef.type == "coefficient", (estimate - 1) * 100, NA_real_),
+          percent_change_low = if_else(coef.type == "coefficient", (conf.low - 1) * 100, NA_real_),
+          percent_change_high = if_else(coef.type == "coefficient", (conf.high - 1) * 100, NA_real_)
+        )
+    } else if (outcome_type == "continuous") {
+      results <- results %>%
+        mutate(
+          percent_change = estimate * 100,
+          percent_change_low = conf.low * 100,
+          percent_change_high = conf.high * 100
+        )
+    }
+
+    diagnostics <- calculate_diagnostics(model)
+    results %>% bind_cols(diagnostics)
+  }
+
+  # Fit univariate models
+  univariate_results <- map_dfr(predictors, function(predictor) {
+    formula <- as.formula(paste(outcome_name, "~", predictor))
+    model <- fit_model(formula)
+    process_results(model, "univariate") %>% mutate(predictor = predictor)
+  })
+
+  # Fit multivariate model
+  if (is.null(custom_formula)) {
+    multivariate_formula <- as.formula(paste(outcome_name, "~", paste(predictors, collapse = " + ")))
+  } else {
+    multivariate_formula <- custom_formula
+  }
+  multivariate_model <- fit_model(multivariate_formula)
+  multivariate_results <- process_results(multivariate_model, "multivariate")
+
+  # Combine results
+  bind_rows(univariate_results, multivariate_results)
+}
 
 
 ###### ---Define theme---######
