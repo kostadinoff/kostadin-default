@@ -595,18 +595,25 @@ krk_reg <- function(data, outcome, predictors, log_outcome = FALSE, custom_formu
     )
   }
 
-  # Function to calculate diagnostics (optional)
+  # Function to calculate diagnostics (including model significance)
   calculate_diagnostics <- function(model) {
     if (!include_diagnostics) {
       return(tibble())
     }
 
     diagnostics <- list()
+    summary_model <- summary(model)
+
+    # Add model significance test
     if (outcome_type == "continuous") {
-      summary_model <- summary(model)
       diagnostics$r_squared <- summary_model$r.squared
       diagnostics$adj_r_squared <- summary_model$adj.r.squared
       diagnostics$residual_std_error <- summary_model$sigma
+      diagnostics$model_p_value <- pf(summary_model$fstatistic[1],
+        summary_model$fstatistic[2],
+        summary_model$fstatistic[3],
+        lower.tail = FALSE
+      )
     } else if (outcome_type == "binary") {
       null_model <- update(model, ~1)
       loglik_model <- as.numeric(logLik(model))
@@ -614,6 +621,10 @@ krk_reg <- function(data, outcome, predictors, log_outcome = FALSE, custom_formu
       diagnostics$pseudo_r_squared <- as.numeric(1 - (loglik_model / loglik_null))
       diagnostics$nagelkerke_r_squared <- as.numeric((1 - exp(-2 * (loglik_model - loglik_null))) /
         (1 - exp(2 * loglik_null / nrow(data))))
+      diagnostics$model_p_value <- pchisq(2 * (loglik_model - loglik_null),
+        df = length(coef(model)) - 1,
+        lower.tail = FALSE
+      )
       if (requireNamespace("pROC", quietly = TRUE)) {
         roc_curve <- pROC::roc(model$y, fitted(model), quiet = TRUE)
         diagnostics$auc_roc <- as.numeric(pROC::auc(roc_curve))
@@ -625,13 +636,16 @@ krk_reg <- function(data, outcome, predictors, log_outcome = FALSE, custom_formu
       diagnostics$pseudo_r_squared <- as.numeric(1 - (loglik_model / loglik_null))
       diagnostics$nagelkerke_r_squared <- as.numeric((1 - exp(-2 * (loglik_model - loglik_null))) /
         (1 - exp(2 * loglik_null / nrow(data))))
+      diagnostics$model_p_value <- pchisq(2 * (loglik_model - loglik_null),
+        df = length(coef(model)),
+        lower.tail = FALSE
+      )
     }
     as_tibble(diagnostics)
   }
 
   # Function to process model output
   process_results <- function(model, model_type) {
-    # Define estimate label based on outcome_type and log_outcome (scalar)
     estimate_label <- if (outcome_type == "binary") {
       "odds_ratio"
     } else if (outcome_type == "continuous" && log_outcome) {
@@ -649,10 +663,9 @@ krk_reg <- function(data, outcome, predictors, log_outcome = FALSE, custom_formu
         AIC = AIC(model),
         BIC = BIC(model),
         estimate_label = estimate_label,
-        coef.type = if_else(grepl("\\|", term), "scale", "coefficient") # Distinguish thresholds
+        coef.type = if_else(grepl("\\|", term), "scale", "coefficient")
       )
 
-    # Apply transformations based on outcome type
     if (outcome_type %in% c("binary", "ordinal") || (outcome_type == "continuous" && log_outcome)) {
       results <- results %>%
         mutate(
