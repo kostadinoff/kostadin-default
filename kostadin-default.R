@@ -1,7 +1,7 @@
 ###### ---Libraries---######
 
 if (!require(pacman)) install.packages("pacman")
-pacman::p_load(tidyverse, haven, modelsummary, MKinfer, rstatix, finalfit, tinytable, monochromeR, ggstats, epitools, ggsurvfit, broom, rstan, brms, gtsummary, quantreg, patchwork, tidymodels, gt, epiR, readxl, scales, marginaleffects, ggthemes, emmeans, janitor, easystats, showtext, brglm2, sysfonts, MASS, detectseparation)
+pacman::p_load(tidyverse, haven, modelsummary, MKinfer, rstatix, finalfit, tinytable, monochromeR, ggstats, epitools, ggsurvfit, broom, rstan, brms, gtsummary, ggplot2, quantreg, patchwork, tidymodels, gt, epiR, readxl, scales, marginaleffects, ggthemes, emmeans, janitor, easystats, showtext, brglm2, sysfonts, MASS, detectseparation)
 
 ###### ---Options---######
 
@@ -711,11 +711,22 @@ krk_reg <- function(data, outcome, predictors, log_outcome = FALSE, custom_formu
 
 
 ###### ---Define theme---######
+
 set_plot_font <- function(font = "Roboto Condensed", size = 18) {
-  showtext::showtext_auto()
+  showtext_auto()
 
   # Try to add the Google font dynamically
-  sysfonts::font_add_google(font, font)
+  tryCatch(
+    {
+      sysfonts::font_add_google(name = font, family = font, db_cache = FALSE)
+      message("Successfully loaded font: ", font)
+    },
+    error = function(e) {
+      message("Font '", font, "' not found on Google Fonts. Falling back to 'Arial'.")
+      # Use a pre-installed system font as fallback (no file path needed)
+      font <<- "Arial" # Update font variable to use Arial
+    }
+  )
 
   # Define relative font sizes based on the `size` parameter
   title_size <- size + 4
@@ -741,6 +752,7 @@ set_plot_font <- function(font = "Roboto Condensed", size = 18) {
 
   theme_set(theme_nice)
 }
+
 
 kkplot <- function(...) {
   ggplot(...) +
