@@ -714,10 +714,19 @@ krk_reg <- function(data, outcome, predictors, log_outcome = FALSE, custom_formu
 set_plot_font <- function(font = "Roboto Condensed", size = 18) {
   showtext::showtext_auto()
 
-  # Try to add the Google font dynamically
-  sysfonts::font_add_google(font, font)
+  # Try to add the Google font dynamically with a fallback
+  tryCatch(
+    {
+      sysfonts::font_add_google(font, font)
+    },
+    error = function(e) {
+      warning(paste("Font", font, "not found on Google Fonts. Falling back to default font."))
+      sysfonts::font_add(family = "sans", regular = "sans") # Fallback to system sans-serif
+      font <<- "sans" # Update font variable to fallback
+    }
+  )
 
-  # Define relative font sizes based on the `size` parameter
+  # Rest of your code...
   title_size <- size + 4
   subtitle_size <- size + 2
   caption_size <- size + 2
@@ -739,13 +748,9 @@ set_plot_font <- function(font = "Roboto Condensed", size = 18) {
       axis.line = element_line()
     )
 
-  # Apply the custom theme and guides for axis ticks in every plot
   theme_set(theme_nice +
     guides(
       x = guide_axis(cap = "both"),
       y = guide_axis(cap = "both")
     ))
 }
-
-# Example usage
-set_plot_font("Roboto Condensed")
