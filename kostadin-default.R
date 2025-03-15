@@ -713,8 +713,9 @@ krk_reg <- function(data, outcome, predictors, log_outcome = FALSE, custom_formu
 ###### ---Define theme---######
 set_plot_font <- function(font = "Roboto Condensed", size = 18) {
   showtext::showtext_auto()
-  sysfonts::font_add_google(font, font)
 
+  # Try to add the Google font dynamically
+  sysfonts::font_add_google(font, font)
 
   # Define relative font sizes based on the `size` parameter
   title_size <- size + 4
@@ -738,7 +739,13 @@ set_plot_font <- function(font = "Roboto Condensed", size = 18) {
       axis.line = element_line()
     )
 
-  theme_set(theme_nice)
+  # Apply the custom theme and guides for axis ticks in every plot
+  theme_set(theme_nice +
+    guides(
+      x = guide_axis(cap = "both"),
+      y = guide_axis(cap = "both")
+    ))
 }
 
-set_plot_font()
+# Example usage
+set_plot_font("Roboto Condensed")
