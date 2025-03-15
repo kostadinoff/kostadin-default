@@ -741,3 +741,8 @@ set_plot_font <- function(font = "Roboto Condensed", size = 18) {
 
   theme_set(theme_nice)
 }
+
+kkplot <- function(...) {
+  ggplot(...) +
+    guides(x = guide_axis(cap = "both"), y = guide_axis(cap = "both"))
+}
