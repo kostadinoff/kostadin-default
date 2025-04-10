@@ -767,7 +767,7 @@ set_plot_font <- function(font = "Roboto Condensed", size = 18) {
   # Define relative font sizes based on the `size` parameter
   title_size <- size + 4
   subtitle_size <- size + 2
-  caption_size <- size + 2
+  caption_size <- size - 2
   axis_title_size <- size
   axis_text_size <- size
   strip_text_size <- size
@@ -778,7 +778,8 @@ set_plot_font <- function(font = "Roboto Condensed", size = 18) {
       axis.ticks.length = unit(4, "mm"),
       plot.title = element_text(family = font, size = title_size, hjust = 0, vjust = 2),
       plot.subtitle = element_text(family = font, size = subtitle_size),
-      plot.caption = element_text(family = font, size = caption_size, hjust = 1),
+      plot.caption = element_text(family = font, hjust = 0.5, vjust = 1,
+      size = caption_size, hjust = 1),
       axis.title = element_text(family = font, size = axis_title_size),
       axis.text = element_text(family = font, size = axis_text_size),
       axis.text.x = element_text(margin = margin(5, b = 10)),
