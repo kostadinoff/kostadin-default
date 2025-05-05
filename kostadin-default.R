@@ -1079,10 +1079,13 @@ kk_summary <- function(data, col, var_name = NULL,
 
 # Function for time series
 
-# Update the function to fix the error message format
-kk_time_series <- function(data) {
+# Improved time series analysis function that accepts piped data and column specification
+kk_time_series <- function(data, value_col = NULL, date_col = NULL) {
   # Check if required packages are installed and load them
-  required_pkgs <- c("dplyr", "moments", "tseries", "pracma", "zoo", "rugarch", "forecast", "entropy", "fractal")
+  required_pkgs <- c(
+    "dplyr", "moments", "tseries", "pracma", "zoo", "rugarch",
+    "forecast", "entropy", "fractal", "lubridate"
+  )
   missing_pkgs <- required_pkgs[!sapply(required_pkgs, requireNamespace, quietly = TRUE)]
 
   if (length(missing_pkgs) > 0) {
@@ -1092,12 +1095,50 @@ kk_time_series <- function(data) {
     ))
   }
 
-  # Load necessary packages but don't attach them to search path
-  # We'll use :: notation to reference functions
+  # Prepare the data according to input
+  if (!is.null(value_col)) {
+    # Convert string to symbol if needed
+    if (is.character(value_col)) {
+      value_col <- rlang::sym(value_col)
+    }
 
-  # Check input
-  if (!all(c("date", "value") %in% names(data))) stop("Data must contain \"date\" and \"value\" columns")
-  if (!inherits(data$date, c("Date", "POSIXct"))) stop("\"date\" must be Date or POSIXct")
+    # Extract the value column
+    data <- dplyr::mutate(data, value = !!value_col)
+  } else if ("value" %in% names(data)) {
+    # Value column already exists
+  } else if ("passengers" %in% names(data)) {
+    # Default for flights data
+    data <- dplyr::mutate(data, value = passengers)
+  } else {
+    stop("Please specify a value column using value_col parameter or ensure 'value' column exists")
+  }
+
+  # Handle date column
+  if (!is.null(date_col)) {
+    # Convert string to symbol if needed
+    if (is.character(date_col)) {
+      date_col <- rlang::sym(date_col)
+    }
+
+    # Extract the date column
+    data <- dplyr::mutate(data, date = !!date_col)
+  } else if ("date" %in% names(data)) {
+    # Date column already exists
+  } else if (all(c("year", "month") %in% names(data))) {
+    # Handle year/month format (like in flights data)
+    data <- dplyr::mutate(data, date = lubridate::ymd(paste(year, month, "01", sep = "-")))
+  } else {
+    stop("Please specify a date column using date_col parameter or ensure 'date' column exists")
+  }
+
+  # Ensure date is proper date format
+  if (!inherits(data$date, c("Date", "POSIXct"))) {
+    # Try to convert to date if it's not already
+    data$date <- try(as.Date(data$date), silent = TRUE)
+    if (inherits(data$date, "try-error") || !inherits(data$date, c("Date", "POSIXct"))) {
+      stop("\"date\" must be Date or POSIXct or convertible to Date")
+    }
+  }
 
   # Count missing values before removing them
   missing_count <- sum(is.na(data$value))
