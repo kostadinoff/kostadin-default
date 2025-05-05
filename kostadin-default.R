@@ -806,6 +806,7 @@ kkplot <- function(...) {
 # - stats: For verbose="custom", list of stats to include (e.g., c("mean", "median"))
 # - pairwise: Whether to compute pairwise comparisons for categorical variables
 # - chi_probs: Optional expected probabilities for chi-square test
+
 kk_summary <- function(data, col, var_name = NULL,
                                verbose = c("full", "basic", "custom"),
                                stats = NULL, pairwise = TRUE, chi_probs = NULL) {
@@ -1015,21 +1016,9 @@ kk_summary <- function(data, col, var_name = NULL,
           "too many levels (>10)"
         }
         result$pairwise_p <- list("not performed")
-        result$pairwise_note <- paste("
-# Required packages: install if not already installed
-if (!require(moments)) install.packages("moments")
-if (!require(tibble)) install.packages("tibble")
-if (!require()) install.packages("entropy")
-if (!require(dplyr)) install.packages("dplyr")
-if (!require(tidyr)) install.packages("tidyr")
-if (!require(rlang)) install.packages("rlang")
-library()
-library(tibble)
-library(entropy)
-library(dplyr)
-library(tidyr)
-library(rlang)
-
+        result$pairwise_note <- paste("pairwise comparisons skipped:", reason)
+      }
+    }
 
     return(result)
   }
