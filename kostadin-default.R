@@ -1076,3 +1076,113 @@ kk_summary <- function(data, col, var_name = NULL,
 
   return(result)
 }
+
+# Function for time series
+
+kk_time_series_stats <- function(data) {
+  # Load required packages
+  if (!requireNamespace("dplyr", quietly = TRUE)) stop("Please install 'dplyr'")
+  if (!requireNamespace("moments", quietly = TRUE)) stop("Please install 'moments'")
+  if (!requireNamespace("zoo", quietly = TRUE)) stop("Please install 'zoo'")
+  require(stats)
+
+  # Validate input
+  stopifnot(is.data.frame(data), all(c("date", "value") %in% names(data)))
+  stopifnot(inherits(data$date, c("POSIXct", "Date")))
+  stopifnot(is.numeric(data$value))
+  stopifnot(nrow(data) >= 2)
+
+  # Sort and convert
+  data <- data[order(data$date), ]
+  ts_data <- zoo::zoo(data$value, order.by = data$date)
+
+  # Descriptive statistics
+  results <- list(
+    length = length(ts_data),
+    mean = mean(ts_data, na.rm = TRUE),
+    median = median(ts_data, na.rm = TRUE),
+    sd = sd(ts_data, na.rm = TRUE),
+    variance = var(ts_data, na.rm = TRUE),
+    min = min(ts_data, na.rm = TRUE),
+    max = max(ts_data, na.rm = TRUE),
+    range = diff(range(ts_data, na.rm = TRUE)),
+    quartiles = quantile(ts_data, probs = c(0.25, 0.5, 0.75), na.rm = TRUE),
+    skewness = moments::skewness(ts_data, na.rm = TRUE),
+    kurtosis = moments::kurtosis(ts_data, na.rm = TRUE)
+  )
+
+  results$cv <- if (abs(results$mean) > 0) results$sd / abs(results$mean) else NA
+  results$missing_count <- sum(is.na(ts_data))
+  results$missing_percent <- 100 * results$missing_count / results$length
+
+  # Outliers (IQR method)
+  iqr <- results$quartiles[3] - results$quartiles[1]
+  bounds <- c(results$quartiles[1] - 1.5 * iqr, results$quartiles[3] + 1.5 * iqr)
+  results$outlier_count <- sum(ts_data < bounds[1] | ts_data > bounds[2], na.rm = TRUE)
+
+  # Rate of change (%)
+  value_lagged <- dplyr::lag(data$value)
+  roc <- (data$value - value_lagged) / value_lagged * 100
+  roc <- roc[-1] # remove first NA resulting from lag
+  results$roc_mean <- mean(roc, na.rm = TRUE)
+  results$roc_sd <- sd(roc, na.rm = TRUE)
+  results$roc_min <- min(roc, na.rm = TRUE)
+  results$roc_max <- max(roc, na.rm = TRUE)
+
+  # Trend (slope)
+  time_index <- as.numeric(data$date - min(data$date)) / 86400
+  lm_model <- lm(data$value ~ time_index)
+  results$trend_slope <- coef(lm_model)[2]
+
+  # Final tibble
+  dplyr::tibble(
+    Metric = c(
+      "Length of Series",
+      "Mean",
+      "Median",
+      "Standard Deviation",
+      "Variance",
+      "Minimum",
+      "Maximum",
+      "Range",
+      "Q1 (25th Percentile)",
+      "Q2 (Median)",
+      "Q3 (75th Percentile)",
+      "Coefficient of Variation",
+      "Skewness",
+      "Kurtosis",
+      "Missing Count",
+      "Missing Percent",
+      "Outlier Count",
+      "Mean Rate of Change (%)",
+      "Rate of Change SD (%)",
+      "Rate of Change Min (%)",
+      "Rate of Change Max (%)",
+      "Trend Slope"
+    ),
+    Value = round(c(
+      results$length,
+      results$mean,
+      results$median,
+      results$sd,
+      results$variance,
+      results$min,
+      results$max,
+      results$range,
+      results$quartiles[1],
+      results$quartiles[2],
+      results$quartiles[3],
+      results$cv,
+      results$skewness,
+      results$kurtosis,
+      results$missing_count,
+      results$missing_percent,
+      results$outlier_count,
+      results$roc_mean,
+      results$roc_sd,
+      results$roc_min,
+      results$roc_max,
+      results$trend_slope
+    ), 4)
+  )
+}
