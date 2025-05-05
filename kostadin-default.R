@@ -1,7 +1,7 @@
 ###### ---Libraries---######
 
 if (!require(pacman)) install.packages("pacman")
-pacman::p_load(tidyverse, haven, modelsummary, MKinfer, rstatix, finalfit, tinytable, monochromeR, ggstats, epitools, ggsurvfit, broom, rstan, brms, gtsummary, ggplot2, quantreg, patchwork, tidymodels, gt, epiR, readxl, scales, marginaleffects, moments, ggthemes, entropy, emmeans, janitor, easystats, showtext, brglm2, sysfonts, MASS, detectseparation)
+pacman::p_load(tidyverse, haven, modelsummary, MKinfer, rstatix, finalfit, tinytable, monochromeR, ggstats, epitools, ggsurvfit, broom, rstan, brms, gtsummary, ggplot2, quantreg, patchwork, tidymodels, gt, epiR, readxl, scales, marginaleffects, moments, ggthemes, entropy, emmeans, janitor, easystats, showtext, tseries, brglm2, sysfonts, pracma, MASS, zoo, detectseparation)
 
 ###### ---Options---######
 
@@ -808,8 +808,8 @@ kkplot <- function(...) {
 # - chi_probs: Optional expected probabilities for chi-square test
 
 kk_summary <- function(data, col, var_name = NULL,
-                               verbose = c("full", "basic", "custom"),
-                               stats = NULL, pairwise = TRUE, chi_probs = NULL) {
+                       verbose = c("full", "basic", "custom"),
+                       stats = NULL, pairwise = TRUE, chi_probs = NULL) {
   # Validate inputs
   verbose <- match.arg(verbose)
   if (!is.data.frame(data)) stop("Input 'data' must be a data frame")
@@ -862,14 +862,15 @@ kk_summary <- function(data, col, var_name = NULL,
     } else {
       stats <- if (result$type == "numeric") {
         c(
-          "mean", "trim_mean", "median", "min", "max", "range", "variance", "sd",
-          "se", "cv_pct", "mad", "iqr", "q1", "q3", "skewness", "kurtosis",
-          "pct_5_95", "ci_mean_low", "ci_mean_up", "shapiro_p", "shapiro_int"
+          "mean", "huber_mean", "trim_mean", "median", "min", "max", "range",
+          "variance", "sd", "se", "cv_pct", "mad", "iqr", "q1", "q3", "skewness",
+          "kurtosis", "pct_5_95", "ci_mean_low", "ci_mean_up", "shapiro_p",
+          "shapiro_int", "n_outliers", "outlier_values"
         )
       } else {
         c(
-          "levels", "n_unique", "mode", "level_summary", "entropy", "chi_p",
-          "chi_int", "chi_note", "pairwise_p", "pairwise_note"
+          "levels", "n_unique", "mode", "level_summary", "entropy", "evenness",
+          "chi_p", "chi_int", "chi_note", "cramer_v", "pairwise_p", "pairwise_note"
         )
       }
     }
@@ -878,6 +879,23 @@ kk_summary <- function(data, col, var_name = NULL,
     if (result$type == "numeric") {
       x <- na.omit(x) # Remove NAs
       if ("mean" %in% stats) result$mean <- mean(x)
+      if ("huber_mean" %in% stats) {
+        # Huber M-estimator with tuning constant c=1.345
+        huber_m <- function(x, c = 1.345, max_iter = 100, tol = 1e-6) {
+          mu <- median(x)
+          sigma <- mad(x, constant = 1.4826)
+          for (i in 1:max_iter) {
+            residuals <- x - mu
+            weights <- pmin(c / abs(residuals / sigma), 1)
+            weights[is.na(weights)] <- 1
+            mu_new <- sum(weights * x) / sum(weights)
+            if (abs(mu_new - mu) < tol) break
+            mu <- mu_new
+          }
+          return(mu)
+        }
+        result$huber_mean <- huber_m(x)
+      }
       if ("trim_mean" %in% stats) result$trim_mean <- mean(x, trim = 0.1)
       if ("median" %in% stats) result$median <- median(x)
       if ("min" %in% stats) result$min <- min(x)
@@ -912,6 +930,13 @@ kk_summary <- function(data, col, var_name = NULL,
           result$shapiro_int <- "sample size out of Shapiro-Wilk range (3-5000)"
         }
       }
+      if ("n_outliers" %in% stats || "outlier_values" %in% stats) {
+        lower_fence <- result$q1 - 1.5 * result$iqr
+        upper_fence <- result$q3 + 1.5 * result$iqr
+        outliers <- x[x < lower_fence | x > upper_fence]
+        result$n_outliers <- length(outliers)
+        result$outlier_values <- list(outliers)
+      }
     } else {
       # Categorical variable statistics
       x <- as.factor(x) # Convert to factor
@@ -925,8 +950,12 @@ kk_summary <- function(data, col, var_name = NULL,
         result$note <- "Warning: Very low counts; chi-square and pairwise tests may be unreliable"
       }
 
+      # Compute n_unique early for evenness
+      if (any(c("n_unique", "evenness", "chi_p", "chi_int", "chi_note", "cramer_v", "pairwise_p") %in% stats)) {
+        result$n_unique <- length(unique(x))
+      }
+
       if ("levels" %in% stats) result$levels <- list(levels(x))
-      if ("n_unique" %in% stats) result$n_unique <- length(unique(x))
       if ("mode" %in% stats) result$mode <- names(sort(table(x), decreasing = TRUE))[1]
 
       if ("level_summary" %in% stats) {
@@ -944,24 +973,33 @@ kk_summary <- function(data, col, var_name = NULL,
         result$level_summary <- list(bind_rows(ci_list))
       }
 
-      if ("entropy" %in% stats) {
+      if ("entropy" %in% stats || "evenness" %in% stats) {
         freqs <- prop.table(freq_table)
         result$entropy <- entropy(freqs, unit = "log2")
       }
 
-      if (any(c("chi_p", "chi_int", "chi_note") %in% stats) && length(unique(x)) > 1) {
+      if ("evenness" %in% stats) {
+        result$evenness <- if (!is.null(result$n_unique) && result$n_unique > 1) {
+          result$entropy / log2(result$n_unique)
+        } else {
+          0
+        }
+      }
+
+      if (any(c("chi_p", "chi_int", "chi_note", "cramer_v") %in% stats) && result$n_unique > 1) {
         expected_prob <- if (!is.null(chi_probs)) {
-          if (length(chi_probs) != length(unique(x)) || sum(chi_probs) != 1) {
+          if (length(chi_probs) != result$n_unique || sum(chi_probs) != 1) {
             stop("chi_probs must match number of levels and sum to 1")
           }
           chi_probs
         } else {
-          rep(1 / length(unique(x)), length(unique(x)))
+          rep(1 / result$n_unique, result$n_unique)
         }
         if (low_counts) {
           result$chi_p <- NA
           result$chi_int <- "chi-square test skipped due to very low counts"
           result$chi_note <- "no test performed"
+          result$cramer_v <- NA
         } else if (any(freq_table < 5) || n_valid < 10) {
           chi_test <- chisq.test(freq_table, p = expected_prob, simulate.p.value = TRUE, B = 2000)
           result$chi_note <- "simulated p-value used due to low counts or small sample size"
@@ -970,6 +1008,7 @@ kk_summary <- function(data, col, var_name = NULL,
             "uniform distribution (p > 0.05)",
             "non-uniform distribution (p <= 0.05)"
           )
+          result$cramer_v <- sqrt(chi_test$statistic / (n_valid * (result$n_unique - 1)))
         } else {
           chi_test <- chisq.test(freq_table, p = expected_prob)
           result$chi_note <- "standard chi-square test"
@@ -978,14 +1017,16 @@ kk_summary <- function(data, col, var_name = NULL,
             "uniform distribution (p > 0.05)",
             "non-uniform distribution (p <= 0.05)"
           )
+          result$cramer_v <- sqrt(chi_test$statistic / (n_valid * (result$n_unique - 1)))
         }
-      } else if (any(c("chi_p", "chi_int", "chi_note") %in% stats)) {
+      } else if (any(c("chi_p", "chi_int", "chi_note", "cramer_v") %in% stats)) {
         result$chi_p <- NA
         result$chi_int <- "chi-square test not applicable (single level)"
         result$chi_note <- "no test performed"
+        result$cramer_v <- NA
       }
 
-      if ("pairwise_p" %in% stats && pairwise && length(unique(x)) > 2 && all(freq_table >= 1) && result$n_unique <= 10) {
+      if ("pairwise_p" %in% stats && pairwise && result$n_unique > 2 && all(freq_table >= 1) && result$n_unique <= 10) {
         level_names <- names(freq_table)
         pairwise_results <- tibble(level1 = character(), level2 = character(), p_value = numeric())
         for (i in 1:(length(level_names) - 1)) {
@@ -1008,7 +1049,7 @@ kk_summary <- function(data, col, var_name = NULL,
       } else if ("pairwise_p" %in% stats) {
         reason <- if (!pairwise) {
           "pairwise comparisons disabled"
-        } else if (length(unique(x)) <= 2) {
+        } else if (result$n_unique <= 2) {
           "2 or fewer levels"
         } else if (any(freq_table < 1)) {
           "zero counts in some levels"
