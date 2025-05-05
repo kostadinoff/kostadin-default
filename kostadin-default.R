@@ -1,7 +1,7 @@
 ###### ---Libraries---######
 
 if (!require(pacman)) install.packages("pacman")
-pacman::p_load(tidyverse, haven, modelsummary, MKinfer, rstatix, finalfit, tinytable, monochromeR, ggstats, epitools, ggsurvfit, broom, rstan, brms, gtsummary, ggplot2, quantreg, patchwork, tidymodels, gt, epiR, readxl, scales, marginaleffects, ggthemes, emmeans, janitor, easystats, showtext, brglm2, sysfonts, MASS, detectseparation)
+pacman::p_load(tidyverse, haven, modelsummary, MKinfer, rstatix, finalfit, tinytable, monochromeR, ggstats, epitools, ggsurvfit, broom, rstan, brms, gtsummary, ggplot2, quantreg, patchwork, tidymodels, gt, epiR, readxl, scales, marginaleffects, moments, ggthemes, entropy, emmeans, janitor, easystats, showtext, brglm2, sysfonts, MASS, detectseparation))
 
 ###### ---Options---######
 
@@ -794,4 +794,255 @@ set_plot_font <- function(font = "Roboto Condensed", size = 18) {
 kkplot <- function(...) {
   ggplot(...) +
     guides(x = guide_axis(cap = "both"), y = guide_axis(cap = "both"))
+}
+
+
+# Function to compute full summary statistics with grouped data and pipe support
+# Parameters:
+# - data: Data frame containing the column of interest
+# - col: Unquoted column name to analyze
+# - var_name: Optional name for the variable (defaults to column name)
+# - verbose: Output level ("full", "basic", or "custom")
+# - stats: For verbose="custom", list of stats to include (e.g., c("mean", "median"))
+# - pairwise: Whether to compute pairwise comparisons for categorical variables
+# - chi_probs: Optional expected probabilities for chi-square test
+kk_summary <- function(data, col, var_name = NULL,
+                               verbose = c("full", "basic", "custom"),
+                               stats = NULL, pairwise = TRUE, chi_probs = NULL) {
+  # Validate inputs
+  verbose <- match.arg(verbose)
+  if (!is.data.frame(data)) stop("Input 'data' must be a data frame")
+
+  # Get column name and set var_name
+  col_quo <- enquo(col)
+  col_name <- quo_name(col_quo)
+  if (is.null(var_name)) var_name <- col_name
+
+  # Extract the column as a vector
+  x <- pull(data, {{ col }})
+
+  # Core function to compute stats for a single vector
+  compute_stats <- function(x, var_name) {
+    # Validate input
+    if (is.null(x)) stop("Input cannot be NULL")
+    if (is.data.frame(x) || is.matrix(x)) stop("Input must be a vector, not a data frame or matrix")
+    if (!is.vector(x) && !is.factor(x)) stop("Input must be a vector or factor")
+
+    # Convert factor to character
+    if (is.factor(x)) x <- as.character(x)
+
+    # Initialize result
+    result <- list()
+
+    # Handle missing values
+    n_miss <- sum(is.na(x))
+    result$var_name <- var_name
+    result$type <- ifelse(is.numeric(x), "numeric", "categorical")
+    result$n_total <- length(x)
+    result$n_miss <- n_miss
+    result$n_valid <- length(x) - n_miss
+    result$miss_pct <- (n_miss / length(x)) * 100
+
+    # Return basic info if all values are NA
+    if (result$n_valid == 0) {
+      result$note <- "All values are missing"
+      return(result)
+    }
+
+    # Define stats to include based on verbose
+    if (verbose == "basic") {
+      stats <- if (result$type == "numeric") {
+        c("mean", "median", "sd", "min", "max")
+      } else {
+        c("level_summary", "mode")
+      }
+    } else if (verbose == "custom" && !is.null(stats)) {
+      stats <- stats
+    } else {
+      stats <- if (result$type == "numeric") {
+        c(
+          "mean", "trim_mean", "median", "min", "max", "range", "variance", "sd",
+          "se", "cv_pct", "mad", "iqr", "q1", "q3", "skewness", "kurtosis",
+          "pct_5_95", "ci_mean_low", "ci_mean_up", "shapiro_p", "shapiro_int"
+        )
+      } else {
+        c(
+          "levels", "n_unique", "mode", "level_summary", "entropy", "chi_p",
+          "chi_int", "chi_note", "pairwise_p", "pairwise_note"
+        )
+      }
+    }
+
+    # Numeric variable statistics
+    if (result$type == "numeric") {
+      x <- na.omit(x) # Remove NAs
+      if ("mean" %in% stats) result$mean <- mean(x)
+      if ("trim_mean" %in% stats) result$trim_mean <- mean(x, trim = 0.1)
+      if ("median" %in% stats) result$median <- median(x)
+      if ("min" %in% stats) result$min <- min(x)
+      if ("max" %in% stats) result$max <- max(x)
+      if ("range" %in% stats) result$range <- max(x) - min(x)
+      if ("variance" %in% stats) result$variance <- var(x)
+      if ("sd" %in% stats) result$sd <- sd(x)
+      if ("se" %in% stats) result$se <- sd(x) / sqrt(length(x))
+      if ("cv_pct" %in% stats) result$cv_pct <- sd(x) / mean(x) * 100
+      if ("mad" %in% stats) result$mad <- mad(x, constant = 1.4826)
+      if ("iqr" %in% stats) result$iqr <- IQR(x)
+      if ("q1" %in% stats) result$q1 <- quantile(x, 0.25)
+      if ("q3" %in% stats) result$q3 <- quantile(x, 0.75)
+      if ("skewness" %in% stats) result$skewness <- skewness(x)
+      if ("kurtosis" %in% stats) result$kurtosis <- kurtosis(x)
+      if ("pct_5_95" %in% stats) result$pct_5_95 <- list(quantile(x, probs = c(0.05, 0.95)))
+      if ("ci_mean_low" %in% stats || "ci_mean_up" %in% stats) {
+        t_test <- t.test(x, conf.level = 0.95)
+        result$ci_mean_low <- t_test$conf.int[1]
+        result$ci_mean_up <- t_test$conf.int[2]
+      }
+      if ("shapiro_p" %in% stats || "shapiro_int" %in% stats) {
+        if (length(x) >= 3 && length(x) <= 5000) {
+          shapiro_test <- shapiro.test(x)
+          result$shapiro_p <- shapiro_test$p.value
+          result$shapiro_int <- ifelse(shapiro_test$p.value > 0.05,
+            "normal (p > 0.05)",
+            "non-normal (p <= 0.05)"
+          )
+        } else {
+          result$shapiro_p <- NA
+          result$shapiro_int <- "sample size out of Shapiro-Wilk range (3-5000)"
+        }
+      }
+    } else {
+      # Categorical variable statistics
+      x <- as.factor(x) # Convert to factor
+      x <- x[!is.na(x)] # Remove NAs
+      freq_table <- table(x)
+      n_valid <- sum(freq_table)
+
+      # Check for low counts
+      low_counts <- all(freq_table < 5) && n_valid < 10
+      if (low_counts && any(c("chi_p", "pairwise_p") %in% stats)) {
+        result$note <- "Warning: Very low counts; chi-square and pairwise tests may be unreliable"
+      }
+
+      if ("levels" %in% stats) result$levels <- list(levels(x))
+      if ("n_unique" %in% stats) result$n_unique <- length(unique(x))
+      if ("mode" %in% stats) result$mode <- names(sort(table(x), decreasing = TRUE))[1]
+
+      if ("level_summary" %in% stats) {
+        proportions <- prop.table(freq_table) * 100
+        ci_list <- lapply(names(freq_table), function(level) {
+          binom_result <- binom.test(freq_table[level], n_valid, conf.level = 0.95)
+          tibble(
+            level = level,
+            count = as.numeric(freq_table[level]),
+            prop_pct = proportions[level],
+            ci_low_pct = binom_result$conf.int[1] * 100,
+            ci_up_pct = binom_result$conf.int[2] * 100
+          )
+        })
+        result$level_summary <- list(bind_rows(ci_list))
+      }
+
+      if ("entropy" %in% stats) {
+        freqs <- prop.table(freq_table)
+        result$entropy <- entropy(freqs, unit = "log2")
+      }
+
+      if (any(c("chi_p", "chi_int", "chi_note") %in% stats) && length(unique(x)) > 1) {
+        expected_prob <- if (!is.null(chi_probs)) {
+          if (length(chi_probs) != length(unique(x)) || sum(chi_probs) != 1) {
+            stop("chi_probs must match number of levels and sum to 1")
+          }
+          chi_probs
+        } else {
+          rep(1 / length(unique(x)), length(unique(x)))
+        }
+        if (low_counts) {
+          result$chi_p <- NA
+          result$chi_int <- "chi-square test skipped due to very low counts"
+          result$chi_note <- "no test performed"
+        } else if (any(freq_table < 5) || n_valid < 10) {
+          chi_test <- chisq.test(freq_table, p = expected_prob, simulate.p.value = TRUE, B = 2000)
+          result$chi_note <- "simulated p-value used due to low counts or small sample size"
+          result$chi_p <- chi_test$p.value
+          result$chi_int <- ifelse(chi_test$p.value > 0.05,
+            "uniform distribution (p > 0.05)",
+            "non-uniform distribution (p <= 0.05)"
+          )
+        } else {
+          chi_test <- chisq.test(freq_table, p = expected_prob)
+          result$chi_note <- "standard chi-square test"
+          result$chi_p <- chi_test$p.value
+          result$chi_int <- ifelse(chi_test$p.value > 0.05,
+            "uniform distribution (p > 0.05)",
+            "non-uniform distribution (p <= 0.05)"
+          )
+        }
+      } else if (any(c("chi_p", "chi_int", "chi_note") %in% stats)) {
+        result$chi_p <- NA
+        result$chi_int <- "chi-square test not applicable (single level)"
+        result$chi_note <- "no test performed"
+      }
+
+      if ("pairwise_p" %in% stats && pairwise && length(unique(x)) > 2 && all(freq_table >= 1) && result$n_unique <= 10) {
+        level_names <- names(freq_table)
+        pairwise_results <- tibble(level1 = character(), level2 = character(), p_value = numeric())
+        for (i in 1:(length(level_names) - 1)) {
+          for (j in (i + 1):length(level_names)) {
+            test_result <- binom.test(c(freq_table[i], freq_table[j]),
+              n = c(freq_table[i] + freq_table[j], freq_table[i] + freq_table[j]),
+              p = 0.5
+            )
+            pairwise_results <- add_row(pairwise_results,
+              level1 = level_names[i],
+              level2 = level_names[j],
+              p_value = test_result$p.value
+            )
+          }
+        }
+        # Apply Holm-Bonferroni correction
+        pairwise_results$p_value <- p.adjust(pairwise_results$p_value, method = "holm")
+        result$pairwise_p <- list(pairwise_results)
+        result$pairwise_note <- "Holm-adjusted p-values from exact binomial tests"
+      } else if ("pairwise_p" %in% stats) {
+        reason <- if (!pairwise) {
+          "pairwise comparisons disabled"
+        } else if (length(unique(x)) <= 2) {
+          "2 or fewer levels"
+        } else if (any(freq_table < 1)) {
+          "zero counts in some levels"
+        } else {
+          "too many levels (>10)"
+        }
+        result$pairwise_p <- list("not performed")
+        result$pairwise_note <- paste("
+# Required packages: install if not already installed
+if (!require(moments)) install.packages("moments")
+if (!require(tibble)) install.packages("tibble")
+if (!require()) install.packages("entropy")
+if (!require(dplyr)) install.packages("dplyr")
+if (!require(tidyr)) install.packages("tidyr")
+if (!require(rlang)) install.packages("rlang")
+library()
+library(tibble)
+library(entropy)
+library(dplyr)
+library(tidyr)
+library(rlang)
+
+
+    return(result)
+  }
+
+  # Handle grouped data
+  if (dplyr::is_grouped_df(data)) {
+    result <- data %>%
+      group_by(across(all_of(group_vars(.)))) %>%
+      summarise(stats = list(compute_stats({{ col }}, var_name)), .groups = "keep") %>%
+      unnest_wider(stats)
+  } else {
+    result <- as_tibble(compute_stats(x, var_name))
+  }
+
+  return(result)
 }
