@@ -923,7 +923,7 @@ kk_summary <- function(data, col, var_name = NULL,
         if (length(x) > 5000) {
           ks_test <- tryCatch(
             {
-              ks.test(x, "pnorm", mean(x), sd(x))
+              suppressWarnings(ks.test(x, "pnorm", mean(x), sd(x)))
             },
             error = function(e) NULL
           )
