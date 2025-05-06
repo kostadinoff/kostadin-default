@@ -1468,13 +1468,13 @@ kk_time_metrics <- function(data, value_col = NULL, date_col = NULL, group_cols 
       if (date_col == "date") {
         date_format <- "date"
       } else if (date_col == "year_week") {
-        date_format = "year_week_string"
+        date_format <- "year_week_string"
       } else if (date_col == "year_month") {
-        date_format = "year_month_string"
+        date_format <- "year_month_string"
       } else if (date_col == "year_quarter") {
-        date_format = "year_quarter_string"
+        date_format <- "year_quarter_string"
       } else {
-        date_format = "date"
+        date_format <- "date"
       }
     }
   }
@@ -1532,33 +1532,42 @@ kk_time_metrics <- function(data, value_col = NULL, date_col = NULL, group_cols 
     dplyr::arrange(date) %>%
     dplyr::filter(!is.na(value)) %>%
     dplyr::group_map(~ {
-      # Extract values and time index
+      # Extract values, time index, and year_week
       y <- .x$value
       n <- length(y)
       if (n < 2) stop("Insufficient data points for time series analysis")
       time_index <- 1:n
+      year_week <- .x[[as.character(date_col)]][order(.x[[as.character(date_col)]])]
 
       # Autocorrelation coefficient r1
       r1 <- if (n > 1) {
-        cor(y[1:(n-1)], y[2:n], use = "pairwise.complete.obs", method = "pearson")
-      } else NA
+        cor(y[1:(n - 1)], y[2:n], use = "pairwise.complete.obs", method = "pearson")
+      } else {
+        NA
+      }
 
       # Durbin-Watson Q_BP
       q_bp <- if (n > 1) {
-        sum((y[2:n] - y[1:(n-1)])^2) / sum(y^2)
-      } else NA
+        sum((y[2:n] - y[1:(n - 1)])^2) / sum(y^2)
+      } else {
+        NA
+      }
 
       # Ljung-Box test with p-value
       ljung_box_p <- if (n > 1) {
         test <- try(stats::Box.test(y, lag = 1, type = "Ljung-Box"), silent = TRUE)
         if (!inherits(test, "try-error")) test$p.value else NA
-      } else NA
+      } else {
+        NA
+      }
 
       # Spearman correlation for trend and p-value
       spearman <- if (n > 1) {
         test <- try(stats::cor.test(time_index, y, method = "spearman", exact = FALSE), silent = TRUE)
         if (!inherits(test, "try-error")) c(test$estimate, test$p.value) else c(NA, NA)
-      } else c(NA, NA)
+      } else {
+        c(NA, NA)
+      }
 
       # Anderson-Darling test for normality with p-value
       ad_test <- if (n > 1 && requireNamespace("nortest", quietly = TRUE)) {
@@ -1569,12 +1578,14 @@ kk_time_metrics <- function(data, value_col = NULL, date_col = NULL, group_cols 
           test <- try(nortest::ad.test(y), silent = TRUE)
           if (!inherits(test, "try-error")) c(test$statistic, test$p.value) else c(NA, NA)
         }
-      } else c(NA, NA)
+      } else {
+        c(NA, NA)
+      }
 
       # Chain base metrics per period
       abs_increase_chain <- if (n > 1) c(NA, diff(y)) else rep(NA, n)
-      t_y_chain <- if (n > 1) c(NA, (y[2:n] / y[1:(n-1)]) * 100) else rep(NA, n)
-      t_y_star_chain <- if (n > 1) c(NA, (y[2:n] / y[1:(n-1)]) * 100 - 100) else rep(NA, n)
+      t_y_chain <- if (n > 1) c(NA, (y[2:n] / y[1:(n - 1)]) * 100) else rep(NA, n)
+      t_y_star_chain <- if (n > 1) c(NA, (y[2:n] / y[1:(n - 1)]) * 100 - 100) else rep(NA, n)
 
       # Fixed base period metrics per period (using first non-NA value as base)
       base_value <- y[1]
@@ -1592,13 +1603,13 @@ kk_time_metrics <- function(data, value_col = NULL, date_col = NULL, group_cols 
       t_y_fixed_mean <- if (!all(is.na(t_y_fixed))) mean(t_y_fixed, na.rm = TRUE) else NA
       t_y_star_fixed_mean <- if (!all(is.na(t_y_star_fixed))) mean(t_y_star_fixed, na.rm = TRUE) else NA
 
-      # Create per-period tibbles
-      abs_increase_chain_df <- dplyr::tibble(period = 1:n, value = round(abs_increase_chain, 4))
-      t_y_chain_df <- dplyr::tibble(period = 1:n, value = round(t_y_chain, 4))
-      t_y_star_chain_df <- dplyr::tibble(period = 1:n, value = round(t_y_star_chain, 4))
-      abs_increase_fixed_df <- dplyr::tibble(period = 1:n, value = round(abs_increase_fixed, 4))
-      t_y_fixed_df <- dplyr::tibble(period = 1:n, value = round(t_y_fixed, 4))
-      t_y_star_fixed_df <- dplyr::tibble(period = 1:n, value = round(t_y_star_fixed, 4))
+      # Create per-period tibbles with year_week as period
+      abs_increase_chain_df <- dplyr::tibble(period = year_week, value = round(abs_increase_chain, 4))
+      t_y_chain_df <- dplyr::tibble(period = year_week, value = round(t_y_chain, 4))
+      t_y_star_chain_df <- dplyr::tibble(period = year_week, value = round(t_y_star_chain, 4))
+      abs_increase_fixed_df <- dplyr::tibble(period = year_week, value = round(abs_increase_fixed, 4))
+      t_y_fixed_df <- dplyr::tibble(period = year_week, value = round(t_y_fixed, 4))
+      t_y_star_fixed_df <- dplyr::tibble(period = year_week, value = round(t_y_star_fixed, 4))
 
       # Create a wide-format tibble with simplified lowercase names
       descriptive <- dplyr::tibble(
@@ -1622,7 +1633,7 @@ kk_time_metrics <- function(data, value_col = NULL, date_col = NULL, group_cols 
         per_devrate_fixed = list(t_y_fixed_df),
         per_incrate_fixed = list(t_y_star_fixed_df)
       ) %>%
-        dplyr::mutate_if(is.numeric, ~round(., 4))
+        dplyr::mutate_if(is.numeric, ~ round(., 4))
 
       return(descriptive)
     }, .keep = TRUE) %>%
