@@ -1,7 +1,7 @@
 ###### ---Libraries---######
 
 if (!require(pacman)) install.packages("pacman")
-pacman::p_load(tidyverse, haven, modelsummary, MKinfer, rstatix, finalfit, tinytable, monochromeR, ggstats, epitools, ggsurvfit, broom, rstan, brms, gtsummary, ggplot2, quantreg, patchwork, tidymodels, gt, epiR, readxl, scales, marginaleffects, moments, ggthemes, entropy, emmeans, janitor, easystats, showtext, tseries, rugarch, forecast, fractal, brglm2, sysfonts, pracma, MASS, zoo, detectseparation)
+pacman::p_load(tidyverse, haven, modelsummary, MKinfer, rstatix, finalfit, tinytable, monochromeR, ggstats, epitools, ggsurvfit, broom, rstan, brms, gtsummary, ggplot2, quantreg, patchwork, tidymodels, gt, epiR, readxl, scales, marginaleffects, moments, ggthemes, entropy, emmeans, janitor, nortest, easystats, showtext, tseries, rugarch, forecast, fractal, brglm2, sysfonts, pracma, MASS, zoo, detectseparation)
 
 ###### ---Options---######
 
@@ -1429,6 +1429,204 @@ kk_time_series <- function(data, value_col = NULL, date_col = NULL, group_cols =
     }, .keep = TRUE) %>%
     dplyr::bind_rows(.id = "group") %>%
     dplyr::mutate(Value = round(as.numeric(Value), 4))
+
+  return(result)
+}
+
+# Function for time series metrics
+
+kk_time_metrics <- function(data, value_col = NULL, date_col = NULL, group_cols = NULL, date_format = "auto", date_pattern = NULL) {
+  # Load required packages
+  required_pkgs <- c("dplyr", "lubridate", "stats", "nortest")
+  missing_pkgs <- required_pkgs[!sapply(required_pkgs, requireNamespace, quietly = TRUE)]
+  if (length(missing_pkgs) > 0) {
+    warning(sprintf("Missing packages: %s", paste(missing_pkgs, collapse = ", ")))
+  }
+
+  # Validate data input
+  if (missing(data)) {
+    stop("Argument 'data' is missing, with no default")
+  }
+
+  # Validate value column
+  if (is.null(value_col) && !"value" %in% names(data)) {
+    stop("Please specify a value column using value_col parameter or ensure 'value' column exists")
+  }
+
+  # Convert value_col to symbol and extract
+  if (!is.null(value_col)) {
+    if (is.character(value_col)) value_col <- rlang::sym(value_col)
+    data <- dplyr::mutate(data, value = !!value_col)
+  }
+
+  # Auto-detect date column if not specified
+  if (is.null(date_col) && date_format == "auto") {
+    potential_date_cols <- c("date", "year_week", "time", "year_month", "year_quarter")
+    date_col <- potential_date_cols[potential_date_cols %in% names(data)][1]
+    if (!is.na(date_col)) {
+      date_col <- rlang::sym(date_col)
+      if (date_col == "date") {
+        date_format <- "date"
+      } else if (date_col == "year_week") {
+        date_format = "year_week_string"
+      } else if (date_col == "year_month") {
+        date_format = "year_month_string"
+      } else if (date_col == "year_quarter") {
+        date_format = "year_quarter_string"
+      } else {
+        date_format = "date"
+      }
+    }
+  }
+
+  # Handle date formats
+  if (date_format == "date" && !is.null(date_col)) {
+    if (is.character(date_col)) date_col <- rlang::sym(date_col)
+    data <- dplyr::mutate(data, date = !!date_col)
+  } else if (date_format == "year_month" && all(c("year", "month") %in% names(data))) {
+    data <- dplyr::mutate(data, date = lubridate::ymd(paste(year, month, "01", sep = "-")))
+  } else if (date_format == "year_week" && all(c("year", "week") %in% names(data))) {
+    data <- dplyr::mutate(data, date = lubridate::make_date(year) + lubridate::weeks(week - 1))
+  } else if (date_format == "year_quarter" && all(c("year", "quarter") %in% names(data))) {
+    data <- dplyr::mutate(data, date = lubridate::yq(paste(year, quarter, sep = "-Q")))
+  } else if (date_format == "year_week_string" && !is.null(date_col)) {
+    if (is.character(date_col)) date_col <- rlang::sym(date_col)
+    data <- dplyr::mutate(data, date = {
+      year_week <- gsub("W|-", "-", as.character(!!date_col))
+      parts <- strsplit(year_week, "-")
+      year <- as.integer(sapply(parts, `[`, 1))
+      week <- as.integer(gsub("^0+", "", sapply(parts, `[`, 2)))
+      lubridate::make_date(year) + lubridate::weeks(week - 1)
+    })
+  } else if (date_format == "year_month_string" && !is.null(date_col)) {
+    if (is.character(date_col)) date_col <- rlang::sym(date_col)
+    data <- dplyr::mutate(data, date = lubridate::ym(as.character(!!date_col)))
+  } else if (date_format == "year_quarter_string" && !is.null(date_col)) {
+    if (is.character(date_col)) date_col <- rlang::sym(date_col)
+    data <- dplyr::mutate(data, date = lubridate::yq(as.character(!!date_col)))
+  } else if (date_format == "custom" && !is.null(date_col) && !is.null(date_pattern)) {
+    if (is.character(date_col)) date_col <- rlang::sym(date_col)
+    data <- dplyr::mutate(data, date = lubridate::parse_date_time(!!date_col, orders = date_pattern))
+  } else if ("date" %in% names(data)) {
+    # Fallback to existing date column
+  } else {
+    stop("Unable to identify a valid date column. Specify date_col and date_format (auto, date, year_month, year_week, year_quarter, year_week_string, year_month_string, year_quarter_string, custom) or ensure 'date' column exists. Available columns: ", paste(names(data), collapse = ", "))
+  }
+
+  # Ensure date is proper format
+  if (!inherits(data$date, c("Date", "POSIXct"))) {
+    data$date <- try(as.Date(data$date), silent = TRUE)
+    if (inherits(data$date, "try-error") || !inherits(data$date, c("Date", "POSIXct"))) {
+      stop("Unable to convert 'date' to Date or POSIXct. Check date_format, date_col, or date_pattern. Sample values: ", paste(head(data[[as.character(date_col)]], 3), collapse = ", "))
+    }
+  }
+
+  # Handle grouping
+  if (!is.null(group_cols)) {
+    group_cols <- rlang::syms(group_cols)
+    data <- dplyr::group_by(data, !!!group_cols)
+  }
+
+  # Process time series for each group
+  result <- data %>%
+    dplyr::arrange(date) %>%
+    dplyr::filter(!is.na(value)) %>%
+    dplyr::group_map(~ {
+      # Extract values and time index
+      y <- .x$value
+      n <- length(y)
+      if (n < 2) stop("Insufficient data points for time series analysis")
+      time_index <- 1:n
+
+      # Autocorrelation coefficient r1
+      r1 <- if (n > 1) {
+        cor(y[1:(n-1)], y[2:n], use = "pairwise.complete.obs", method = "pearson")
+      } else NA
+
+      # Durbin-Watson Q_BP
+      q_bp <- if (n > 1) {
+        sum((y[2:n] - y[1:(n-1)])^2) / sum(y^2)
+      } else NA
+
+      # Ljung-Box test with p-value
+      ljung_box_p <- if (n > 1) {
+        test <- try(stats::Box.test(y, lag = 1, type = "Ljung-Box"), silent = TRUE)
+        if (!inherits(test, "try-error")) test$p.value else NA
+      } else NA
+
+      # Spearman correlation for trend and p-value
+      spearman <- if (n > 1) {
+        test <- try(stats::cor.test(time_index, y, method = "spearman", exact = FALSE), silent = TRUE)
+        if (!inherits(test, "try-error")) c(test$estimate, test$p.value) else c(NA, NA)
+      } else c(NA, NA)
+
+      # Anderson-Darling test for normality with p-value
+      ad_test <- if (n > 1 && requireNamespace("nortest", quietly = TRUE)) {
+        if (n < 7) {
+          warning("Sample size too small for Anderson-Darling test (< 7 observations). Returning NA.")
+          c(NA, NA)
+        } else {
+          test <- try(nortest::ad.test(y), silent = TRUE)
+          if (!inherits(test, "try-error")) c(test$statistic, test$p.value) else c(NA, NA)
+        }
+      } else c(NA, NA)
+
+      # Chain base metrics per period
+      abs_increase_chain <- if (n > 1) c(NA, diff(y)) else rep(NA, n)
+      t_y_chain <- if (n > 1) c(NA, (y[2:n] / y[1:(n-1)]) * 100) else rep(NA, n)
+      t_y_star_chain <- if (n > 1) c(NA, (y[2:n] / y[1:(n-1)]) * 100 - 100) else rep(NA, n)
+
+      # Fixed base period metrics per period (using first non-NA value as base)
+      base_value <- y[1]
+      abs_increase_fixed <- if (n > 0) y - base_value else rep(NA, n)
+      t_y_fixed <- if (n > 0) (y / base_value) * 100 else rep(NA, n)
+      t_y_star_fixed <- if (n > 0) (y / base_value) * 100 - 100 else rep(NA, n)
+
+      # Compute means for chain base metrics
+      abs_increase_chain_mean <- if (!all(is.na(abs_increase_chain))) mean(abs_increase_chain, na.rm = TRUE) else NA
+      t_y_chain_mean <- if (!all(is.na(t_y_chain))) mean(t_y_chain, na.rm = TRUE) else NA
+      t_y_star_chain_mean <- if (!all(is.na(t_y_star_chain))) mean(t_y_star_chain, na.rm = TRUE) else NA
+
+      # Compute means for fixed base metrics
+      abs_increase_fixed_mean <- if (!all(is.na(abs_increase_fixed))) mean(abs_increase_fixed, na.rm = TRUE) else NA
+      t_y_fixed_mean <- if (!all(is.na(t_y_fixed))) mean(t_y_fixed, na.rm = TRUE) else NA
+      t_y_star_fixed_mean <- if (!all(is.na(t_y_star_fixed))) mean(t_y_star_fixed, na.rm = TRUE) else NA
+
+      # Create per-period tibbles
+      abs_increase_chain_df <- dplyr::tibble(period = 1:n, value = round(abs_increase_chain, 4))
+      t_y_chain_df <- dplyr::tibble(period = 1:n, value = round(t_y_chain, 4))
+      t_y_star_chain_df <- dplyr::tibble(period = 1:n, value = round(t_y_star_chain, 4))
+      abs_increase_fixed_df <- dplyr::tibble(period = 1:n, value = round(abs_increase_fixed, 4))
+      t_y_fixed_df <- dplyr::tibble(period = 1:n, value = round(t_y_fixed, 4))
+      t_y_star_fixed_df <- dplyr::tibble(period = 1:n, value = round(t_y_star_fixed, 4))
+
+      # Create a wide-format tibble with simplified lowercase names
+      descriptive <- dplyr::tibble(
+        autocorr_r1 = r1,
+        durbinwatson_qbp = q_bp,
+        ljungbox_pval = ljung_box_p,
+        spearman_corr = spearman[1],
+        spearman_pval = spearman[2],
+        anderson_stat = ad_test[1],
+        anderson_pval = ad_test[2],
+        mean_absinc_chain = abs_increase_chain_mean,
+        mean_devrate_chain = t_y_chain_mean,
+        mean_incrate_chain = t_y_star_chain_mean,
+        mean_absinc_fixed = abs_increase_fixed_mean,
+        mean_devrate_fixed = t_y_fixed_mean,
+        mean_incrate_fixed = t_y_star_fixed_mean,
+        per_absinc_chain = list(abs_increase_chain_df),
+        per_devrate_chain = list(t_y_chain_df),
+        per_incrate_chain = list(t_y_star_chain_df),
+        per_absinc_fixed = list(abs_increase_fixed_df),
+        per_devrate_fixed = list(t_y_fixed_df),
+        per_incrate_fixed = list(t_y_star_fixed_df)
+      ) %>%
+        dplyr::mutate_if(is.numeric, ~round(., 4))
+
+      return(descriptive)
+    }, .keep = TRUE) %>%
+    dplyr::bind_rows(.id = "group")
 
   return(result)
 }
