@@ -810,32 +810,24 @@ kkplot <- function(...) {
 kk_summary <- function(data, col, var_name = NULL,
                        verbose = c("full", "basic", "custom"),
                        stats = NULL, pairwise = TRUE, chi_probs = NULL) {
-  # Validate inputs
   verbose <- match.arg(verbose)
   if (!is.data.frame(data)) stop("Input 'data' must be a data frame")
 
-  # Get column name and set var_name
   col_quo <- enquo(col)
   col_name <- quo_name(col_quo)
   if (is.null(var_name)) var_name <- col_name
 
-  # Extract the column as a vector
   x <- pull(data, {{ col }})
 
-  # Core function to compute stats for a single vector
   compute_stats <- function(x, var_name) {
-    # Validate input
     if (is.null(x)) stop("Input cannot be NULL")
     if (is.data.frame(x) || is.matrix(x)) stop("Input must be a vector, not a data frame or matrix")
     if (!is.vector(x) && !is.factor(x)) stop("Input must be a vector or factor")
 
-    # Convert factor to character
     if (is.factor(x)) x <- as.character(x)
 
-    # Initialize result
     result <- list()
 
-    # Handle missing values
     n_miss <- sum(is.na(x))
     result$var_name <- var_name
     result$type <- ifelse(is.numeric(x), "numeric", "categorical")
@@ -844,13 +836,11 @@ kk_summary <- function(data, col, var_name = NULL,
     result$n_valid <- length(x) - n_miss
     result$miss_pct <- (n_miss / length(x)) * 100
 
-    # Return basic info if all values are NA
     if (result$n_valid == 0) {
       result$note <- "All values are missing"
       return(result)
     }
 
-    # Define stats to include based on verbose
     if (verbose == "basic") {
       stats <- if (result$type == "numeric") {
         c("mean", "median", "sd", "min", "max")
@@ -862,25 +852,23 @@ kk_summary <- function(data, col, var_name = NULL,
     } else {
       stats <- if (result$type == "numeric") {
         c(
-          "mean", "huber_mean", "trim_mean", "median", "min", "max", "range",
+          "mean", "huber_mean", "trim_mean", "geometric_mean", "median", "min", "max", "range",
           "variance", "sd", "se", "cv_pct", "mad", "iqr", "q1", "q3", "skewness",
           "kurtosis", "pct_5_95", "ci_mean_low", "ci_mean_up", "shapiro_p",
-          "shapiro_int", "n_outliers", "outlier_values"
+          "shapiro_int", "ks_p", "ks_int", "n_outliers", "outlier_values"
         )
       } else {
         c(
           "levels", "n_unique", "mode", "level_summary", "entropy", "evenness",
-          "chi_p", "chi_int", "chi_note", "cramer_v", "pairwise_p", "pairwise_note"
+          "gini_index", "chi_p", "chi_int", "chi_note", "cramer_v", "pairwise_p", "pairwise_note"
         )
       }
     }
 
-    # Numeric variable statistics
     if (result$type == "numeric") {
-      x <- na.omit(x) # Remove NAs
+      x <- na.omit(x)
       if ("mean" %in% stats) result$mean <- mean(x)
       if ("huber_mean" %in% stats) {
-        # Huber M-estimator with tuning constant c=1.345
         huber_m <- function(x, c = 1.345, max_iter = 100, tol = 1e-6) {
           mu <- median(x)
           sigma <- mad(x, constant = 1.4826)
@@ -897,6 +885,7 @@ kk_summary <- function(data, col, var_name = NULL,
         result$huber_mean <- huber_m(x)
       }
       if ("trim_mean" %in% stats) result$trim_mean <- mean(x, trim = 0.1)
+      if ("geometric_mean" %in% stats) result$geometric_mean <- if (all(x > 0)) exp(mean(log(x))) else NA
       if ("median" %in% stats) result$median <- median(x)
       if ("min" %in% stats) result$min <- min(x)
       if ("max" %in% stats) result$max <- max(x)
@@ -909,8 +898,8 @@ kk_summary <- function(data, col, var_name = NULL,
       if ("iqr" %in% stats) result$iqr <- IQR(x)
       if ("q1" %in% stats) result$q1 <- quantile(x, 0.25)
       if ("q3" %in% stats) result$q3 <- quantile(x, 0.75)
-      if ("skewness" %in% stats) result$skewness <- skewness(x)
-      if ("kurtosis" %in% stats) result$kurtosis <- kurtosis(x)
+      if ("skewness" %in% stats) result$skewness <- moments::skewness(x)
+      if ("kurtosis" %in% stats) result$kurtosis <- moments::kurtosis(x)
       if ("pct_5_95" %in% stats) result$pct_5_95 <- list(quantile(x, probs = c(0.05, 0.95)))
       if ("ci_mean_low" %in% stats || "ci_mean_up" %in% stats) {
         t_test <- t.test(x, conf.level = 0.95)
@@ -930,39 +919,58 @@ kk_summary <- function(data, col, var_name = NULL,
           result$shapiro_int <- "sample size out of Shapiro-Wilk range (3-5000)"
         }
       }
+      if ("ks_p" %in% stats || "ks_int" %in% stats) {
+        if (length(x) > 5000) {
+          ks_test <- tryCatch(
+            {
+              ks.test(x, "pnorm", mean(x), sd(x))
+            },
+            error = function(e) NULL
+          )
+          if (!is.null(ks_test)) {
+            result$ks_p <- ks_test$p.value
+            result$ks_int <- ifelse(ks_test$p.value > 0.05,
+              "normal (KS p > 0.05)",
+              "non-normal (KS p <= 0.05)"
+            )
+          } else {
+            result$ks_p <- NA
+            result$ks_int <- "KS test failed"
+          }
+        } else {
+          result$ks_p <- NA
+          result$ks_int <- "KS test not performed (n <= 5000)"
+        }
+      }
       if ("n_outliers" %in% stats || "outlier_values" %in% stats) {
-        lower_fence <- result$q1 - 1.5 * result$iqr
-        upper_fence <- result$q3 + 1.5 * result$iqr
+        q1 <- quantile(x, 0.25)
+        q3 <- quantile(x, 0.75)
+        iqr <- q3 - q1
+        lower_fence <- q1 - 1.5 * iqr
+        upper_fence <- q3 + 1.5 * iqr
         outliers <- x[x < lower_fence | x > upper_fence]
         result$n_outliers <- length(outliers)
         result$outlier_values <- list(outliers)
       }
     } else {
-      # Categorical variable statistics
-      x <- as.factor(x) # Convert to factor
-      x <- x[!is.na(x)] # Remove NAs
+      x <- as.factor(x)
+      x <- x[!is.na(x)]
       freq_table <- table(x)
       n_valid <- sum(freq_table)
-
-      # Check for low counts
       low_counts <- all(freq_table < 5) && n_valid < 10
       if (low_counts && any(c("chi_p", "pairwise_p") %in% stats)) {
         result$note <- "Warning: Very low counts; chi-square and pairwise tests may be unreliable"
       }
-
-      # Compute n_unique early for evenness
       if (any(c("n_unique", "evenness", "chi_p", "chi_int", "chi_note", "cramer_v", "pairwise_p") %in% stats)) {
         result$n_unique <- length(unique(x))
       }
-
       if ("levels" %in% stats) result$levels <- list(levels(x))
       if ("mode" %in% stats) result$mode <- names(sort(table(x), decreasing = TRUE))[1]
-
       if ("level_summary" %in% stats) {
         proportions <- prop.table(freq_table) * 100
         ci_list <- lapply(names(freq_table), function(level) {
           binom_result <- binom.test(freq_table[level], n_valid, conf.level = 0.95)
-          tibble(
+          tibble::tibble(
             level = level,
             count = as.numeric(freq_table[level]),
             prop_pct = proportions[level],
@@ -970,14 +978,12 @@ kk_summary <- function(data, col, var_name = NULL,
             ci_up_pct = binom_result$conf.int[2] * 100
           )
         })
-        result$level_summary <- list(bind_rows(ci_list))
+        result$level_summary <- list(dplyr::bind_rows(ci_list))
       }
-
       if ("entropy" %in% stats || "evenness" %in% stats) {
         freqs <- prop.table(freq_table)
-        result$entropy <- entropy(freqs, unit = "log2")
+        result$entropy <- entropy::entropy(freqs, unit = "log2")
       }
-
       if ("evenness" %in% stats) {
         result$evenness <- if (!is.null(result$n_unique) && result$n_unique > 1) {
           result$entropy / log2(result$n_unique)
@@ -985,7 +991,10 @@ kk_summary <- function(data, col, var_name = NULL,
           0
         }
       }
-
+      if ("gini_index" %in% stats) {
+        p <- prop.table(freq_table)
+        result$gini_index <- 1 - sum(p^2)
+      }
       if (any(c("chi_p", "chi_int", "chi_note", "cramer_v") %in% stats) && result$n_unique > 1) {
         expected_prob <- if (!is.null(chi_probs)) {
           if (length(chi_probs) != result$n_unique || sum(chi_probs) != 1) {
@@ -1025,24 +1034,22 @@ kk_summary <- function(data, col, var_name = NULL,
         result$chi_note <- "no test performed"
         result$cramer_v <- NA
       }
-
       if ("pairwise_p" %in% stats && pairwise && result$n_unique > 2 && all(freq_table >= 1) && result$n_unique <= 10) {
         level_names <- names(freq_table)
-        pairwise_results <- tibble(level1 = character(), level2 = character(), p_value = numeric())
+        pairwise_results <- tibble::tibble(level1 = character(), level2 = character(), p_value = numeric())
         for (i in 1:(length(level_names) - 1)) {
           for (j in (i + 1):length(level_names)) {
             test_result <- binom.test(c(freq_table[i], freq_table[j]),
               n = c(freq_table[i] + freq_table[j], freq_table[i] + freq_table[j]),
               p = 0.5
             )
-            pairwise_results <- add_row(pairwise_results,
+            pairwise_results <- dplyr::add_row(pairwise_results,
               level1 = level_names[i],
               level2 = level_names[j],
               p_value = test_result$p.value
             )
           }
         }
-        # Apply Holm-Bonferroni correction
         pairwise_results$p_value <- p.adjust(pairwise_results$p_value, method = "holm")
         result$pairwise_p <- list(pairwise_results)
         result$pairwise_note <- "Holm-adjusted p-values from exact binomial tests"
@@ -1064,16 +1071,14 @@ kk_summary <- function(data, col, var_name = NULL,
     return(result)
   }
 
-  # Handle grouped data
   if (dplyr::is_grouped_df(data)) {
     result <- data %>%
-      group_by(across(all_of(group_vars(.)))) %>%
-      summarise(stats = list(compute_stats({{ col }}, var_name)), .groups = "keep") %>%
-      unnest_wider(stats)
+      dplyr::group_by(dplyr::across(dplyr::all_of(dplyr::group_vars(.)))) %>%
+      dplyr::summarise(stats = list(compute_stats({{ col }}, var_name)), .groups = "keep") %>%
+      tidyr::unnest_wider(stats)
   } else {
-    result <- as_tibble(compute_stats(x, var_name))
+    result <- tibble::as_tibble(compute_stats(x, var_name))
   }
-
   return(result)
 }
 
