@@ -1194,16 +1194,23 @@ kk_time_series <- function(data, value_col = NULL, date_col = NULL, group_cols =
       if (n == 0) stop("No valid data points after filtering")
 
       # Rate of change
-      roc <- try({
-        vals <- .x$value
-        (vals[-1] - vals[-n]) / vals[-n] * 100
-      }, silent = TRUE)
-      roc_stats <- if (inherits(roc, "try-error")) rep(NA, 4) else c(
-        mean(roc, na.rm = TRUE),
-        stats::sd(roc, na.rm = TRUE),
-        min(roc, na.rm = TRUE),
-        max(roc, na.rm = TRUE)
+      roc <- try(
+        {
+          vals <- .x$value
+          (vals[-1] - vals[-n]) / vals[-n] * 100
+        },
+        silent = TRUE
       )
+      roc_stats <- if (inherits(roc, "try-error")) {
+        rep(NA, 4)
+      } else {
+        c(
+          mean(roc, na.rm = TRUE),
+          stats::sd(roc, na.rm = TRUE),
+          min(roc, na.rm = TRUE),
+          max(roc, na.rm = TRUE)
+        )
+      }
 
       # Time index for regression
       time_index <- as.numeric(difftime(.x$date, min(.x$date), units = "days"))
@@ -1224,117 +1231,150 @@ kk_time_series <- function(data, value_col = NULL, date_col = NULL, group_cols =
       }
 
       # GARCH volatility
-      garch_vol <- try({
-        if (requireNamespace("rugarch", quietly = TRUE) && n >= 30) {
-          suppressWarnings({
-            spec <- rugarch::ugarchspec(
-              mean.model = list(armaOrder = c(1, 0)),
-              variance.model = list(model = "sGARCH", garchOrder = c(1, 1))
-            )
-            garch_fit <- rugarch::ugarchfit(spec, .x$value, solver = "hybrid")
-            mean(rugarch::sigma(garch_fit), na.rm = TRUE)
-          })
-        } else {
-          NA
-        }
-      }, silent = TRUE)
+      garch_vol <- try(
+        {
+          if (requireNamespace("rugarch", quietly = TRUE) && n >= 30) {
+            suppressWarnings({
+              spec <- rugarch::ugarchspec(
+                mean.model = list(armaOrder = c(1, 0)),
+                variance.model = list(model = "sGARCH", garchOrder = c(1, 1))
+              )
+              garch_fit <- rugarch::ugarchfit(spec, .x$value, solver = "hybrid")
+              mean(rugarch::sigma(garch_fit), na.rm = TRUE)
+            })
+          } else {
+            NA
+          }
+        },
+        silent = TRUE
+      )
       if (inherits(garch_vol, "try-error")) garch_vol <- NA
 
       # FFT for dominant frequency
-      dom_freq <- try({
-        freq <- stats::spectrum(.x$value, plot = FALSE)
-        freq$freq[which.max(freq$spec)]
-      }, silent = TRUE)
+      dom_freq <- try(
+        {
+          freq <- stats::spectrum(.x$value, plot = FALSE)
+          freq$freq[which.max(freq$spec)]
+        },
+        silent = TRUE
+      )
       if (inherits(dom_freq, "try-error")) dom_freq <- NA
 
       # Entropy
-      shannon_entropy <- try({
-        if (requireNamespace("entropy", quietly = TRUE)) {
-          breaks <- pretty(range(.x$value), n = min(10, n / 5))
-          binned <- cut(.x$value, breaks, include.lowest = TRUE)
-          counts <- table(binned)
-          entropy::entropy(counts / sum(counts))
-        } else {
-          NA
-        }
-      }, silent = TRUE)
+      shannon_entropy <- try(
+        {
+          if (requireNamespace("entropy", quietly = TRUE)) {
+            breaks <- pretty(range(.x$value), n = min(10, n / 5))
+            binned <- cut(.x$value, breaks, include.lowest = TRUE)
+            counts <- table(binned)
+            entropy::entropy(counts / sum(counts))
+          } else {
+            NA
+          }
+        },
+        silent = TRUE
+      )
       if (inherits(shannon_entropy, "try-error")) shannon_entropy <- NA
 
       # ACF/PACF
-      acf_lag1 <- try({
-        acf_result <- stats::acf(.x$value, lag.max = 1, plot = FALSE)
-        acf_result$acf[2]
-      }, silent = TRUE)
+      acf_lag1 <- try(
+        {
+          acf_result <- stats::acf(.x$value, lag.max = 1, plot = FALSE)
+          acf_result$acf[2]
+        },
+        silent = TRUE
+      )
       if (inherits(acf_lag1, "try-error")) acf_lag1 <- NA
 
-      pacf_lag1 <- try({
-        pacf_result <- stats::pacf(.x$value, lag.max = 1, plot = FALSE)
-        pacf_result$acf[1]
-      }, silent = TRUE)
+      pacf_lag1 <- try(
+        {
+          pacf_result <- stats::pacf(.x$value, lag.max = 1, plot = FALSE)
+          pacf_result$acf[1]
+        },
+        silent = TRUE
+      )
       if (inherits(pacf_lag1, "try-error")) pacf_lag1 <- NA
 
       # Ljung-Box
-      ljung_pval <- try({
-        test <- stats::Box.test(.x$value, lag = min(10, n - 1), type = "Ljung-Box")
-        test$p.value
-      }, silent = TRUE)
+      ljung_pval <- try(
+        {
+          test <- stats::Box.test(.x$value, lag = min(10, n - 1), type = "Ljung-Box")
+          test$p.value
+        },
+        silent = TRUE
+      )
       if (inherits(ljung_pval, "try-error")) ljung_pval <- NA
 
       # Stationarity
-      adf_result <- try({
-        if (requireNamespace("tseries", quietly = TRUE) && n >= 10) {
-          suppressWarnings({
-            test <- tseries::adf.test(.x$value)
-            c(test$p.value, test$statistic)
-          })
-        } else {
-          c(NA, NA)
-        }
-      }, silent = TRUE)
+      adf_result <- try(
+        {
+          if (requireNamespace("tseries", quietly = TRUE) && n >= 10) {
+            suppressWarnings({
+              test <- tseries::adf.test(.x$value)
+              c(test$p.value, test$statistic)
+            })
+          } else {
+            c(NA, NA)
+          }
+        },
+        silent = TRUE
+      )
       if (inherits(adf_result, "try-error")) adf_result <- c(NA, NA)
 
-      kpss_result <- try({
-        if (requireNamespace("tseries", quietly = TRUE) && n >= 10) {
-          suppressWarnings({
-            test <- tseries::kpss.test(.x$value)
-            c(test$p.value, test$statistic)
-          })
-        } else {
-          c(NA, NA)
-        }
-      }, silent = TRUE)
+      kpss_result <- try(
+        {
+          if (requireNamespace("tseries", quietly = TRUE) && n >= 10) {
+            suppressWarnings({
+              test <- tseries::kpss.test(.x$value)
+              c(test$p.value, test$statistic)
+            })
+          } else {
+            c(NA, NA)
+          }
+        },
+        silent = TRUE
+      )
       if (inherits(kpss_result, "try-error")) kpss_result <- c(NA, NA)
 
       # Hurst
-      hurst <- try({
-        if (requireNamespace("pracma", quietly = TRUE) && n >= 20) {
-          temp <- capture.output({
-            h_result <- pracma::hurstexp(.x$value, display = FALSE)
-          })
-          h_result$Hs
-        } else {
-          NA
-        }
-      }, silent = TRUE)
+      hurst <- try(
+        {
+          if (requireNamespace("pracma", quietly = TRUE) && n >= 20) {
+            temp <- capture.output({
+              h_result <- pracma::hurstexp(.x$value, display = FALSE)
+            })
+            h_result$Hs
+          } else {
+            NA
+          }
+        },
+        silent = TRUE
+      )
       if (inherits(hurst, "try-error")) hurst <- NA
 
       # Lyapunov
-      lyap <- try({
-        if (requireNamespace("fractal", quietly = TRUE) && n >= 30) {
-          fractal::lyapunov(.x$value)
-        } else {
-          NA
-        }
-      }, silent = TRUE)
+      lyap <- try(
+        {
+          if (requireNamespace("fractal", quietly = TRUE) && n >= 30) {
+            fractal::lyapunov(.x$value)
+          } else {
+            NA
+          }
+        },
+        silent = TRUE
+      )
       if (inherits(lyap, "try-error")) lyap <- NA
 
       # Outliers
-      outlier_count <- try({
-        q1 <- stats::quantile(.x$value, 0.25)
-        q3 <- stats::quantile(.x$value, 0.75)
-        iqr <- q3 - q1
-        sum(.x$value < (q1 - 1.5 * iqr) | .x$value > (q3 + 1.5 * iqr))
-      }, silent = TRUE)
+      outlier_count <- try(
+        {
+          q1 <- stats::quantile(.x$value, 0.25)
+          q3 <- stats::quantile(.x$value, 0.75)
+          iqr <- q3 - q1
+          sum(.x$value < (q1 - 1.5 * iqr) | .x$value > (q3 + 1.5 * iqr))
+        },
+        silent = TRUE
+      )
       if (inherits(outlier_count, "try-error")) outlier_count <- NA
 
       # Compile results
@@ -1347,41 +1387,44 @@ kk_time_series <- function(data, value_col = NULL, date_col = NULL, group_cols =
           "KPSS p-value", "KPSS statistic", "ACF Lag 1", "PACF Lag 1", "Ljung-Box p-value",
           "Hurst Exponent", "GARCH Volatility", "Shannon Entropy", "Dominant Frequency", "Lyapunov Exponent"
         ),
-        Value = tryCatch({
-          c(
-            n,
-            mean(.x$value, na.rm = TRUE),
-            stats::median(.x$value, na.rm = TRUE),
-            stats::sd(.x$value, na.rm = TRUE),
-            stats::var(.x$value, na.rm = TRUE),
-            min(.x$value, na.rm = TRUE),
-            max(.x$value, na.rm = TRUE),
-            diff(range(.x$value, na.rm = TRUE)),
-            stats::quantile(.x$value, 0.25, na.rm = TRUE),
-            stats::quantile(.x$value, 0.75, na.rm = TRUE),
-            if (requireNamespace("moments", quietly = TRUE)) moments::skewness(.x$value, na.rm = TRUE) else NA,
-            if (requireNamespace("moments", quietly = TRUE)) moments::kurtosis(.x$value, na.rm = TRUE) else NA,
-            if (mean(.x$value, na.rm = TRUE) != 0) stats::sd(.x$value, na.rm = TRUE) / abs(mean(.x$value, na.rm = TRUE)) else NA,
-            missing_count,
-            outlier_count,
-            roc_stats[1], roc_stats[2], roc_stats[3], roc_stats[4],
-            trend_slope,
-            trend_strength,
-            adf_result[1], adf_result[2],
-            kpss_result[1], kpss_result[2],
-            acf_lag1,
-            pacf_lag1,
-            ljung_pval,
-            hurst,
-            garch_vol,
-            shannon_entropy,
-            dom_freq,
-            lyap
-          )
-        }, error = function(e) {
-          warning("Error in calculating statistics: ", e$message)
-          rep(NA, 33)
-        })
+        Value = tryCatch(
+          {
+            c(
+              n,
+              mean(.x$value, na.rm = TRUE),
+              stats::median(.x$value, na.rm = TRUE),
+              stats::sd(.x$value, na.rm = TRUE),
+              stats::var(.x$value, na.rm = TRUE),
+              min(.x$value, na.rm = TRUE),
+              max(.x$value, na.rm = TRUE),
+              diff(range(.x$value, na.rm = TRUE)),
+              stats::quantile(.x$value, 0.25, na.rm = TRUE),
+              stats::quantile(.x$value, 0.75, na.rm = TRUE),
+              if (requireNamespace("moments", quietly = TRUE)) moments::skewness(.x$value, na.rm = TRUE) else NA,
+              if (requireNamespace("moments", quietly = TRUE)) moments::kurtosis(.x$value, na.rm = TRUE) else NA,
+              if (mean(.x$value, na.rm = TRUE) != 0) stats::sd(.x$value, na.rm = TRUE) / abs(mean(.x$value, na.rm = TRUE)) else NA,
+              missing_count,
+              outlier_count,
+              roc_stats[1], roc_stats[2], roc_stats[3], roc_stats[4],
+              trend_slope,
+              trend_strength,
+              adf_result[1], adf_result[2],
+              kpss_result[1], kpss_result[2],
+              acf_lag1,
+              pacf_lag1,
+              ljung_pval,
+              hurst,
+              garch_vol,
+              shannon_entropy,
+              dom_freq,
+              lyap
+            )
+          },
+          error = function(e) {
+            warning("Error in calculating statistics: ", e$message)
+            rep(NA, 33)
+          }
+        )
       )
     }, .keep = TRUE) %>%
     dplyr::bind_rows(.id = "group") %>%
