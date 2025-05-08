@@ -8,6 +8,7 @@ pacman::p_load(tidyverse, haven, modelsummary, MKinfer, rstatix, finalfit, tinyt
 options(brms.backend = "cmdstanr")
 options(mc.cores = parallel::detectCores())
 options(ggplot2.messages = FALSE)
+options(dplyr.width = Inf)
 ###### ---Functions---######
 
 # Function to round numeric columns in a tibble
@@ -288,7 +289,7 @@ compare_proportions_by <- function(data,
 }
 
 
-# Plot 
+# Plot
 
 ###### ---Define theme---######
 
