@@ -370,10 +370,6 @@ univariate_cat_plot <- function(data, variable) {
     ) +
     scale_x_continuous(labels = scales::percent) +
     expand_limits(x = 1) +
-    guides(
-      x = guide_axis(cap = "both"),
-      y = guide_axis(cap = "both")
-    ) +
     labs(
       x = "Proportion",
       y = "Category",
@@ -427,10 +423,6 @@ univariate_cont_plot <- function(data, variable) {
       hjust = -0.1
     ) +
     expand_limits(x = c(min(data[[rlang::as_name(variable)]], na.rm = TRUE), max(data[[rlang::as_name(variable)]], na.rm = TRUE))) +
-    guides(
-      x = guide_axis(cap = "both"),
-      y = guide_axis(cap = "both")
-    ) +
     labs(
       x = "Value",
       y = "Density",
