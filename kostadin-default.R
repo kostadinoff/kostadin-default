@@ -1,14 +1,13 @@
 ###### ---Libraries---######
 
 if (!require(pacman)) install.packages("pacman")
-pacman::p_load(tidyverse, haven, modelsummary, MKinfer, rstatix, finalfit, tinytable, monochromeR, ggstats, epitools, ggsurvfit, broom, rstan, brms, gtsummary, ggplot2, quantreg, patchwork, tidymodels, gt, epiR, readxl, scales, marginaleffects, moments, ggthemes, entropy, emmeans, janitor, nortest, easystats, showtext, tseries, rugarch, forecast, fractal, brglm2, sysfonts, pracma, MASS, zoo, detectseparation)
+pacman::p_load(tidyverse, haven, modelsummary, MKinfer, rstatix, finalfit, tinytable, monochromeR, ggstats, epitools, ggsurvfit, broom, rstan, brms, gtsummary, ggplot2, quantreg, patchwork, tidymodels, gt, epiR, readxl, scales, marginaleffects, moments, ggthemes, entropy, emmeans, janitor, nortest, easystats, showtext, tseries, rugarch, forecast, fractal, brglm2, sysfonts, pracma, zoo, detectseparation)
 
 ###### ---Options---######
 
 options(brms.backend = "cmdstanr")
 options(mc.cores = parallel::detectCores())
 options(ggplot2.messages = FALSE)
-options(dplyr.width = Inf)
 ###### ---Functions---######
 
 # Function to round numeric columns in a tibble
