@@ -287,6 +287,59 @@ compare_proportions_by <- function(data,
   return(results)
 }
 
+
+# Plot 
+
+###### ---Define theme---######
+
+set_plot_font <- function(font = "Roboto Condensed", size = 18) {
+  showtext_auto()
+
+  # Try to add the Google font dynamically
+  tryCatch(
+    {
+      sysfonts::font_add_google(name = font, family = font, db_cache = FALSE)
+      message("Successfully loaded font: ", font)
+    },
+    error = function(e) {
+      message("Font '", font, "' not found on Google Fonts. Falling back to 'Arial'.")
+      # Use a pre-installed system font as fallback (no file path needed)
+      font <<- "Arial" # Update font variable to use Arial
+    }
+  )
+
+  # Define relative font sizes based on the `size` parameter
+  title_size <- size + 4
+  subtitle_size <- size + 2
+  caption_size <- size - 2
+  axis_title_size <- size
+  axis_text_size <- size
+  strip_text_size <- size
+
+  theme_nice <- ggthemes::theme_tufte() +
+    theme(
+      axis.ticks = element_line(linewidth = 0.5, color = "black"),
+      axis.ticks.length = unit(4, "mm"),
+      plot.title = element_text(family = font, size = title_size, hjust = 0, vjust = 2),
+      plot.subtitle = element_text(family = font, size = subtitle_size),
+      plot.caption = element_text(family = font, hjust = 0.5, vjust = 1, size = caption_size),
+      plot.caption.position = "plot",
+      axis.title = element_text(family = font, size = axis_title_size),
+      axis.text = element_text(family = font, size = axis_text_size),
+      axis.text.x = element_text(margin = margin(5, b = 10)),
+      strip.text = element_text(family = font, size = strip_text_size),
+      axis.line = element_line()
+    )
+
+  theme_set(theme_nice)
+}
+
+
+kkplot <- function(...) {
+  ggplot(...) +
+    guides(x = guide_axis(cap = "both"), y = guide_axis(cap = "both"))
+}
+
 # Univariate categorical plot
 
 univariate_cat_plot <- function(data, variable) {
@@ -301,7 +354,7 @@ univariate_cat_plot <- function(data, variable) {
     count({{ variable }}) %>%
     filter(!is.na({{ variable }})) %>%
     mutate(prop = n / sum(n)) %>%
-    ggplot(aes(y = fct_reorder({{ variable }}, prop), x = prop)) +
+    kkplot(aes(y = fct_reorder({{ variable }}, prop), x = prop)) +
     geom_col(
       alpha = 0.6,
       fill = "gray60",
@@ -333,7 +386,7 @@ univariate_cont_plot <- function(data, variable) {
   title <- paste("Univariate Continuous Plot of", rlang::as_name(variable))
 
   data %>%
-    ggplot(aes(x = !!variable)) +
+    kkplot(aes(x = !!variable)) +
     geom_density(
       adjust = 1 / 2,
       fill = "gray90",
@@ -743,56 +796,6 @@ kkonehot <- function(data, column) {
 
   # Return the modified dataset
   return(data)
-}
-
-###### ---Define theme---######
-
-set_plot_font <- function(font = "Roboto Condensed", size = 18) {
-  showtext_auto()
-
-  # Try to add the Google font dynamically
-  tryCatch(
-    {
-      sysfonts::font_add_google(name = font, family = font, db_cache = FALSE)
-      message("Successfully loaded font: ", font)
-    },
-    error = function(e) {
-      message("Font '", font, "' not found on Google Fonts. Falling back to 'Arial'.")
-      # Use a pre-installed system font as fallback (no file path needed)
-      font <<- "Arial" # Update font variable to use Arial
-    }
-  )
-
-  # Define relative font sizes based on the `size` parameter
-  title_size <- size + 4
-  subtitle_size <- size + 2
-  caption_size <- size - 2
-  axis_title_size <- size
-  axis_text_size <- size
-  strip_text_size <- size
-
-  theme_nice <- ggthemes::theme_tufte() +
-    theme(
-      axis.ticks = element_line(linewidth = 0.5, color = "black"),
-      axis.ticks.length = unit(4, "mm"),
-      plot.title = element_text(family = font, size = title_size, hjust = 0, vjust = 2),
-      plot.subtitle = element_text(family = font, size = subtitle_size),
-      plot.caption = element_text(family = font, hjust = 0.5, vjust = 1, size = caption_size),
-      plot.caption.position = "plot",
-      axis.title = element_text(family = font, size = axis_title_size),
-      axis.text = element_text(family = font, size = axis_text_size),
-      axis.text.x = element_text(margin = margin(5, b = 10)),
-      strip.text = element_text(family = font, size = strip_text_size),
-      axis.line = element_line()
-    )
-
-  theme_set(theme_nice)
-}
-
-
-kkplot <- function(...) {
-  ggplot(...) +
-    guides(x = guide_axis(cap = "both"), y = guide_axis(cap = "both"))
 }
 
 
