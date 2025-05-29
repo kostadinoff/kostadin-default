@@ -321,7 +321,7 @@ set_plot_font <- function(font = "Roboto Condensed", size = 18) {
     theme(
       axis.ticks = element_line(linewidth = 0.5, color = "black"),
       axis.ticks.length = unit(4, "mm"),
-      plot.title = element_text(family = font, size = title_size, hjust = 0, vjust = 2),
+      plot.title = element_text(family = font, size = title_size, hjust = 0, vjust = 2, margin = margin(t = 10, b = 10)),
       plot.subtitle = element_text(family = font, size = subtitle_size),
       plot.caption = element_text(family = font, hjust = 0.5, vjust = 1, size = caption_size),
       plot.caption.position = "plot",
