@@ -295,7 +295,7 @@ compare_proportions_by <- function(data,
 
 set_plot_font <- function(font = "Roboto Condensed", size = 18) {
   showtext_auto()
-
+  showtext_opts(dpi = 900)
   # Try to add the Google font dynamically
   tryCatch(
     {
