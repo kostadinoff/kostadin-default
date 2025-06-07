@@ -1077,6 +1077,14 @@ kk_summary <- function(data, col, var_name = NULL,
 
 # Function for time series
 
+# Load required packages
+required_pkgs <- c("dplyr", "moments", "tseries", "pracma", "zoo", "rugarch", "forecast", "entropy")
+missing_pkgs <- required_pkgs[!sapply(required_pkgs, requireNamespace, quietly = TRUE)]
+if (length(missing_pkgs) > 0) {
+  warning(sprintf("Missing packages: %s. Some metrics may return NA.", paste(missing_pkgs, collapse = ", ")))
+}
+
+# Define the function
 kk_time_series <- function(data, value_col = NULL, date_col = "date", group_cols = NULL, wide_format = FALSE, skip_advanced = FALSE, round_digits = 4) {
   # Validate data input
   if (missing(data)) {
@@ -1320,11 +1328,21 @@ kk_time_series <- function(data, value_col = NULL, date_col = "date", group_cols
           {
             if (requireNamespace("rugarch", quietly = TRUE) && n >= 30) {
               suppressWarnings({
+                # Difference data if non-stationary
+                y_diff <- if (n > 1) diff(y) else y
                 spec <- rugarch::ugarchspec(
                   mean.model = list(armaOrder = c(1, 0)),
                   variance.model = list(model = "sGARCH", garchOrder = c(1, 1))
                 )
-                garch_fit <- rugarch::ugarchfit(spec, y, solver = "hybrid")
+                garch_fit <- rugarch::ugarchfit(spec, y_diff, solver = "hybrid")
+                if (is.null(garch_fit@fit$convergence) || garch_fit@fit$convergence != 0) {
+                  # Try simpler model
+                  spec <- rugarch::ugarchspec(
+                    mean.model = list(armaOrder = c(0, 0)),
+                    variance.model = list(model = "sGARCH", garchOrder = c(1, 1))
+                  )
+                  garch_fit <- rugarch::ugarchfit(spec, y_diff, solver = "hybrid")
+                }
                 mean(rugarch::sigma(garch_fit), na.rm = TRUE)
               })
             } else {
@@ -1334,7 +1352,7 @@ kk_time_series <- function(data, value_col = NULL, date_col = "date", group_cols
           },
           silent = TRUE
         )
-        if (inherits(garch_vol, "try-error")) {
+        if (inherits(garch_vol, "try-error") || is.null(garch_vol)) {
           warning("GARCH fitting failed. Returning NA.")
           garch_vol <- NA
         }
@@ -1467,22 +1485,6 @@ kk_time_series <- function(data, value_col = NULL, date_col = "date", group_cols
         if (inherits(hurst, "try-error")) hurst <- NA
       }
 
-      lyap <- NA
-      if (!skip_advanced || n >= 30) {
-        lyap <- try(
-          {
-            if (requireNamespace("fractal", quietly = TRUE) && n >= 30) {
-              fractal::lyapunov(y)
-            } else {
-              warning("Sample size < 30 or 'fractal' package missing for Lyapunov exponent. Returning NA.")
-              NA
-            }
-          },
-          silent = TRUE
-        )
-        if (inherits(lyap, "try-error")) lyap <- NA
-      }
-
       # Compile results
       result_tibble <- dplyr::tibble(
         Metric = c(
@@ -1497,7 +1499,7 @@ kk_time_series <- function(data, value_col = NULL, date_col = "date", group_cols
           "Mean Rate of Change (%)", "SD Rate of Change (%)", "Min ROC (%)", "Max ROC (%)",
           "Trend Slope", "Trend Strength", "ADF p-value", "ADF statistic",
           "KPSS p-value", "KPSS statistic", "ACF Lag 1", "PACF Lag 1", "Ljung-Box p-value",
-          "Hurst Exponent", "GARCH Volatility", "Shannon Entropy", "Dominant Frequency", "Lyapunov Exponent"
+          "Hurst Exponent", "GARCH Volatility", "Shannon Entropy", "Dominant Frequency"
         ),
         Value = tryCatch(
           {
@@ -1515,12 +1517,12 @@ kk_time_series <- function(data, value_col = NULL, date_col = "date", group_cols
               adf_result[1], adf_result[2],
               kpss_result[1], kpss_result[2],
               acf_lag1, pacf_lag1, ljung_pval,
-              hurst, garch_vol, shannon_entropy, dom_freq, lyap
+              hurst, garch_vol, shannon_entropy, dom_freq
             )
           },
           error = function(e) {
             warning("Error in calculating statistics: ", e$message)
-            rep(NA, 49)
+            rep(NA, 48)
           }
         )
       )
@@ -1532,7 +1534,7 @@ kk_time_series <- function(data, value_col = NULL, date_col = "date", group_cols
   if (!is.null(group_cols)) {
     result <- dplyr::bind_rows(result, .id = "group_idx") %>%
       dplyr::mutate(group = group_labels[as.integer(group_idx)]) %>%
-      dplyr::select(-group_idx) # Remove group_idx
+      dplyr::select(-group_idx)
   } else {
     result <- dplyr::bind_rows(result)
   }
@@ -1541,9 +1543,6 @@ kk_time_series <- function(data, value_col = NULL, date_col = "date", group_cols
   if (wide_format) {
     result <- result %>%
       tidyr::pivot_wider(names_from = Metric, values_from = Value, names_repair = "minimal")
-  } else {
-    result <- result %>%
-      dplyr::mutate(Value = round(as.numeric(Value), round_digits))
   }
 
   return(result)
