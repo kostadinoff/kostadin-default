@@ -294,7 +294,6 @@ compare_proportions_by <- function(data,
 ###### ---Define theme---######
 
 set_plot_font <- function(font = "Roboto Condensed", size = 18) {
-
   # Try to add the Google font dynamically
   tryCatch(
     {
@@ -1078,14 +1077,7 @@ kk_summary <- function(data, col, var_name = NULL,
 
 # Function for time series
 
-kk_time_series <- function(data, value_col = NULL, date_col = NULL, group_cols = NULL, date_format = "auto", date_pattern = NULL) {
-  # Load required packages
-  required_pkgs <- c("dplyr", "moments", "tseries", "pracma", "zoo", "rugarch", "forecast", "entropy", "fractal", "lubridate")
-  missing_pkgs <- required_pkgs[!sapply(required_pkgs, requireNamespace, quietly = TRUE)]
-  if (length(missing_pkgs) > 0) {
-    warning(sprintf("Missing packages: %s", paste(missing_pkgs, collapse = ", ")))
-  }
-
+kk_time_series <- function(data, value_col = NULL, date_col = "date", group_cols = NULL, wide_format = FALSE, skip_advanced = FALSE, round_digits = 4) {
   # Validate data input
   if (missing(data)) {
     stop("Argument 'data' is missing, with no default")
@@ -1102,346 +1094,463 @@ kk_time_series <- function(data, value_col = NULL, date_col = NULL, group_cols =
     data <- dplyr::mutate(data, value = !!value_col)
   }
 
-  # Auto-detect date column if not specified
-  if (is.null(date_col) && date_format == "auto") {
-    potential_date_cols <- c("date", "year_week", "time", "year_month", "year_quarter")
-    date_col <- potential_date_cols[potential_date_cols %in% names(data)][1]
-    if (!is.na(date_col)) {
-      date_col <- rlang::sym(date_col)
-      # Infer date_format based on column name or content
-      if (date_col == "date") {
-        date_format <- "date"
-      } else if (date_col == "year_week") {
-        date_format <- "year_week_string"
-      } else if (date_col == "year_month") {
-        date_format <- "year_month_string"
-      } else if (date_col == "year_quarter") {
-        date_format <- "year_quarter_string"
-      } else {
-        date_format <- "date"
-      }
-    }
+  # Validate date column
+  if (!date_col %in% names(data)) {
+    stop(sprintf("Date column '%s' not found in data. Available columns: %s", date_col, paste(names(data), collapse = ", ")))
   }
-
-  # Handle date formats
-  if (date_format == "date" && !is.null(date_col)) {
-    if (is.character(date_col)) date_col <- rlang::sym(date_col)
-    data <- dplyr::mutate(data, date = !!date_col)
-  } else if (date_format == "year_month" && all(c("year", "month") %in% names(data))) {
-    data <- dplyr::mutate(data, date = lubridate::ymd(paste(year, month, "01", sep = "-")))
-  } else if (date_format == "year_week" && all(c("year", "week") %in% names(data))) {
-    data <- dplyr::mutate(data, date = lubridate::make_date(year) + lubridate::weeks(week - 1))
-  } else if (date_format == "year_quarter" && all(c("year", "quarter") %in% names(data))) {
-    data <- dplyr::mutate(data, date = lubridate::yq(paste(year, quarter, sep = "-Q")))
-  } else if (date_format == "year_week_string" && !is.null(date_col)) {
-    # Handle year_week as a single string column (e.g., "2020-1", "2020-01", "2020-W1")
-    if (is.character(date_col)) date_col <- rlang::sym(date_col)
-    data <- dplyr::mutate(data, date = {
-      # Normalize and split year_week string
-      year_week <- gsub("W|-", "-", as.character(!!date_col)) # Replace 'W' or '-' with '-'
-      parts <- strsplit(year_week, "-")
-      year <- as.integer(sapply(parts, `[`, 1))
-      week <- as.integer(gsub("^0+", "", sapply(parts, `[`, 2))) # Remove leading zeros
-      lubridate::make_date(year) + lubridate::weeks(week - 1)
-    })
-  } else if (date_format == "year_month_string" && !is.null(date_col)) {
-    # Handle year_month as a single string column (e.g., "2020-01")
-    if (is.character(date_col)) date_col <- rlang::sym(date_col)
-    data <- dplyr::mutate(data, date = lubridate::ym(as.character(!!date_col)))
-  } else if (date_format == "year_quarter_string" && !is.null(date_col)) {
-    # Handle year_quarter as a single string column (e.g., "2020-Q1")
-    if (is.character(date_col)) date_col <- rlang::sym(date_col)
-    data <- dplyr::mutate(data, date = lubridate::yq(as.character(!!date_col)))
-  } else if (date_format == "custom" && !is.null(date_col) && !is.null(date_pattern)) {
-    # Handle custom date formats with user-specified pattern
-    if (is.character(date_col)) date_col <- rlang::sym(date_col)
-    data <- dplyr::mutate(data, date = lubridate::parse_date_time(!!date_col, orders = date_pattern))
-  } else if ("date" %in% names(data)) {
-    # Fallback to existing date column
-  } else {
-    stop("Unable to identify a valid date column. Specify date_col and date_format (auto, date, year_month, year_week, year_quarter, year_week_string, year_month_string, year_quarter_string, custom) or ensure 'date' column exists. Available columns: ", paste(names(data), collapse = ", "))
-  }
+  if (is.character(date_col)) date_col <- rlang::sym(date_col)
 
   # Ensure date is proper format
-  if (!inherits(data$date, c("Date", "POSIXct"))) {
-    data$date <- try(as.Date(data$date), silent = TRUE)
-    if (inherits(data$date, "try-error") || !inherits(data$date, c("Date", "POSIXct"))) {
-      stop("Unable to convert 'date' to Date or POSIXct. Check date_format, date_col, or date_pattern. Sample values: ", paste(head(data[[as.character(date_col)]], 3), collapse = ", "))
-    }
+  if (!inherits(data[[date_col]], c("Date", "POSIXct"))) {
+    stop(sprintf("Column '%s' must be of class Date or POSIXct. Current class: %s", date_col, class(data[[date_col]])[1]))
   }
 
   # Handle grouping
   if (!is.null(group_cols)) {
     group_cols <- rlang::syms(group_cols)
     data <- dplyr::group_by(data, !!!group_cols)
+    # Check for duplicate dates within groups
+    data <- data %>%
+      dplyr::group_by(!!!group_cols) %>%
+      dplyr::mutate(.dup_dates = any(duplicated(!!date_col))) %>%
+      dplyr::ungroup()
+    if (any(data$.dup_dates)) {
+      stop("Duplicate dates found within groups. Ensure unique dates per group or preprocess data to aggregate duplicates.")
+    }
+    data <- dplyr::select(data, -.dup_dates)
+    data <- dplyr::group_by(data, !!!group_cols)
+  } else {
+    # Check for duplicate dates in ungrouped data
+    if (any(duplicated(data[[date_col]]))) {
+      stop("Duplicate dates found in data. Ensure unique dates or preprocess data to aggregate duplicates.")
+    }
+  }
+
+  # Extract group keys for proper labeling
+  group_keys <- if (!is.null(group_cols)) dplyr::group_keys(data) else NULL
+  group_labels <- if (!is.null(group_keys)) {
+    apply(group_keys, 1, paste, collapse = "_")
+  } else {
+    NULL
   }
 
   # Process time series for each group
   result <- data %>%
-    dplyr::arrange(date) %>%
+    dplyr::arrange(!!date_col) %>%
     dplyr::filter(!is.na(value)) %>%
     dplyr::group_map(~ {
-      # Count missing values
+      # Extract values and count observations
+      y <- .x$value
+      n <- length(y)
+      if (n < 2) stop("Insufficient data points for time series analysis (n < 2)")
+      if (n < 5) warning("Sample size is small (n = ", n, "). Some metrics may be unreliable or return NA.")
+
+      # Check for negative values
+      if (any(y <= 0)) {
+        warning("Non-positive values detected in group. Geometric mean growth rate may be unreliable.")
+      }
+
+      # Count missing values (before filtering)
       missing_count <- sum(is.na(.x$value))
 
-      # Create zoo object
-      ts_zoo <- try(zoo::zoo(.x$value, order.by = .x$date), silent = TRUE)
+      # Create zoo object for time series
+      ts_zoo <- try(zoo::zoo(y, order.by = .x[[as.character(date_col)]]), silent = TRUE)
       if (inherits(ts_zoo, "try-error")) stop("Failed to create zoo object")
 
-      # Calculate statistics
-      n <- length(.x$value)
-      if (n == 0) stop("No valid data points after filtering")
-
-      # Rate of change
-      roc <- try(
-        {
-          vals <- .x$value
-          (vals[-1] - vals[-n]) / vals[-n] * 100
-        },
-        silent = TRUE
-      )
-      roc_stats <- if (inherits(roc, "try-error")) {
-        rep(NA, 4)
+      # Basic statistics
+      mean_val <- mean(y, na.rm = TRUE)
+      median_val <- stats::median(y, na.rm = TRUE)
+      sd_val <- stats::sd(y, na.rm = TRUE)
+      var_val <- stats::var(y, na.rm = TRUE)
+      min_val <- min(y, na.rm = TRUE)
+      max_val <- max(y, na.rm = TRUE)
+      range_val <- diff(range(y, na.rm = TRUE))
+      q1_val <- stats::quantile(y, 0.25, na.rm = TRUE)
+      q3_val <- stats::quantile(y, 0.75, na.rm = TRUE)
+      skewness_val <- if (requireNamespace("moments", quietly = TRUE) && n >= 3) {
+        moments::skewness(y, na.rm = TRUE)
       } else {
-        c(
-          mean(roc, na.rm = TRUE),
-          stats::sd(roc, na.rm = TRUE),
-          min(roc, na.rm = TRUE),
-          max(roc, na.rm = TRUE)
-        )
+        warning("Sample size < 3 or 'moments' package missing for skewness. Returning NA.")
+        NA
+      }
+      kurtosis_val <- if (requireNamespace("moments", quietly = TRUE) && n >= 4) {
+        moments::kurtosis(y, na.rm = TRUE)
+      } else {
+        warning("Sample size < 4 or 'moments' package missing for kurtosis. Returning NA.")
+        NA
+      }
+      cv_val <- if (mean_val != 0 && n >= 2) {
+        sd_val / abs(mean_val)
+      } else {
+        warning("Mean is zero or sample size < 2 for CV. Returning NA.")
+        NA
       }
 
-      # Time index for regression
-      time_index <- as.numeric(difftime(.x$date, min(.x$date), units = "days"))
-
-      # Trend strength
-      trend_model <- try(stats::lm(value ~ time_index, data = .x), silent = TRUE)
-      trend_slope <- trend_strength <- NA
-      if (!inherits(trend_model, "try-error")) {
-        trend_slope <- try(stats::coef(trend_model)[2], silent = TRUE)
-        if (!inherits(trend_slope, "try-error")) {
-          trend_fit <- try(stats::predict(trend_model), silent = TRUE)
-          if (!inherits(trend_fit, "try-error")) {
-            detrended <- .x$value - trend_fit
-            trend_strength <- try(1 - stats::var(detrended) / stats::var(.x$value), silent = TRUE)
-            if (inherits(trend_strength, "try-error")) trend_strength <- NA
-          }
-        }
-      }
-
-      # GARCH volatility
-      garch_vol <- try(
-        {
-          if (requireNamespace("rugarch", quietly = TRUE) && n >= 30) {
-            suppressWarnings({
-              spec <- rugarch::ugarchspec(
-                mean.model = list(armaOrder = c(1, 0)),
-                variance.model = list(model = "sGARCH", garchOrder = c(1, 1))
-              )
-              garch_fit <- rugarch::ugarchfit(spec, .x$value, solver = "hybrid")
-              mean(rugarch::sigma(garch_fit), na.rm = TRUE)
-            })
-          } else {
-            NA
-          }
-        },
-        silent = TRUE
-      )
-      if (inherits(garch_vol, "try-error")) garch_vol <- NA
-
-      # FFT for dominant frequency
-      dom_freq <- try(
-        {
-          freq <- stats::spectrum(.x$value, plot = FALSE)
-          freq$freq[which.max(freq$spec)]
-        },
-        silent = TRUE
-      )
-      if (inherits(dom_freq, "try-error")) dom_freq <- NA
-
-      # Entropy
-      shannon_entropy <- try(
-        {
-          if (requireNamespace("entropy", quietly = TRUE)) {
-            breaks <- pretty(range(.x$value), n = min(10, n / 5))
-            binned <- cut(.x$value, breaks, include.lowest = TRUE)
-            counts <- table(binned)
-            entropy::entropy(counts / sum(counts))
-          } else {
-            NA
-          }
-        },
-        silent = TRUE
-      )
-      if (inherits(shannon_entropy, "try-error")) shannon_entropy <- NA
-
-      # ACF/PACF
-      acf_lag1 <- try(
-        {
-          acf_result <- stats::acf(.x$value, lag.max = 1, plot = FALSE)
-          acf_result$acf[2]
-        },
-        silent = TRUE
-      )
-      if (inherits(acf_lag1, "try-error")) acf_lag1 <- NA
-
-      pacf_lag1 <- try(
-        {
-          pacf_result <- stats::pacf(.x$value, lag.max = 1, plot = FALSE)
-          pacf_result$acf[1]
-        },
-        silent = TRUE
-      )
-      if (inherits(pacf_lag1, "try-error")) pacf_lag1 <- NA
-
-      # Ljung-Box
-      ljung_pval <- try(
-        {
-          test <- stats::Box.test(.x$value, lag = min(10, n - 1), type = "Ljung-Box")
-          test$p.value
-        },
-        silent = TRUE
-      )
-      if (inherits(ljung_pval, "try-error")) ljung_pval <- NA
-
-      # Stationarity
-      adf_result <- try(
-        {
-          if (requireNamespace("tseries", quietly = TRUE) && n >= 10) {
-            suppressWarnings({
-              test <- tseries::adf.test(.x$value)
-              c(test$p.value, test$statistic)
-            })
-          } else {
-            c(NA, NA)
-          }
-        },
-        silent = TRUE
-      )
-      if (inherits(adf_result, "try-error")) adf_result <- c(NA, NA)
-
-      kpss_result <- try(
-        {
-          if (requireNamespace("tseries", quietly = TRUE) && n >= 10) {
-            suppressWarnings({
-              test <- tseries::kpss.test(.x$value)
-              c(test$p.value, test$statistic)
-            })
-          } else {
-            c(NA, NA)
-          }
-        },
-        silent = TRUE
-      )
-      if (inherits(kpss_result, "try-error")) kpss_result <- c(NA, NA)
-
-      # Hurst
-      hurst <- try(
-        {
-          if (requireNamespace("pracma", quietly = TRUE) && n >= 20) {
-            temp <- capture.output({
-              h_result <- pracma::hurstexp(.x$value, display = FALSE)
-            })
-            h_result$Hs
-          } else {
-            NA
-          }
-        },
-        silent = TRUE
-      )
-      if (inherits(hurst, "try-error")) hurst <- NA
-
-      # Lyapunov
-      lyap <- try(
-        {
-          if (requireNamespace("fractal", quietly = TRUE) && n >= 30) {
-            fractal::lyapunov(.x$value)
-          } else {
-            NA
-          }
-        },
-        silent = TRUE
-      )
-      if (inherits(lyap, "try-error")) lyap <- NA
-
-      # Outliers
+      # Outlier count (IQR method)
       outlier_count <- try(
         {
-          q1 <- stats::quantile(.x$value, 0.25)
-          q3 <- stats::quantile(.x$value, 0.75)
-          iqr <- q3 - q1
-          sum(.x$value < (q1 - 1.5 * iqr) | .x$value > (q3 + 1.5 * iqr))
+          iqr <- q3_val - q1_val
+          sum(y < (q1_val - 1.5 * iqr) | y > (q3_val + 1.5 * iqr))
         },
         silent = TRUE
       )
       if (inherits(outlier_count, "try-error")) outlier_count <- NA
 
+      # Chain-base metrics
+      abs_increase_chain <- if (n > 1) diff(y) else NA
+      t_y_chain <- if (n > 1 && all(y[1:(n - 1)] != 0)) {
+        (y[2:n] / y[1:(n - 1)])
+      } else {
+        warning("Zero values in denominator for chain-base growth rate. Returning NA.")
+        rep(NA, n - 1)
+      }
+      t_y_star_chain <- if (n > 1 && all(y[1:(n - 1)] != 0)) {
+        ((y[2:n] / y[1:(n - 1)]) - 1) * 100
+      } else {
+        warning("Zero values in denominator for chain-base rate of increase. Returning NA.")
+        rep(NA, n - 1)
+      }
+
+      # Fixed-base metrics (using first value as base)
+      base_value <- y[1]
+      abs_increase_fixed <- if (n > 0 && base_value != 0) {
+        y - base_value
+      } else {
+        warning("Base value is zero for fixed-base metrics. Returning NA.")
+        rep(NA, n)
+      }
+      t_y_fixed <- if (n > 0 && base_value != 0) (y / base_value) else rep(NA, n)
+      t_y_star_fixed <- if (n > 0 && base_value != 0) ((y / base_value) - 1) * 100 else rep(NA, n)
+
+      # Geometric mean growth rate (chain-base, coefficient form)
+      t_y_chain_coeff <- t_y_chain[!is.na(t_y_chain) & t_y_chain > 0]
+      geom_mean_growth <- if (length(t_y_chain_coeff) > 0) {
+        exp(mean(log(t_y_chain_coeff), na.rm = TRUE))
+      } else {
+        warning("No valid positive chain-base growth rates for geometric mean. Returning NA.")
+        NA
+      }
+      geom_mean_growth_pct <- if (!is.na(geom_mean_growth)) (geom_mean_growth - 1) * 100 else NA
+
+      # Mean rate of increase (T̅′)
+      mean_incrate <- if (!is.na(geom_mean_growth)) geom_mean_growth - 1 else NA
+      mean_incrate_pct <- if (!is.na(geom_mean_growth)) geom_mean_growth_pct else NA
+
+      # Summary statistics for chain-base and fixed-base metrics
+      mean_absinc_chain <- if (!all(is.na(abs_increase_chain))) mean(abs_increase_chain, na.rm = TRUE) else NA
+      mean_devrate_chain <- if (!all(is.na(t_y_chain))) mean(t_y_chain, na.rm = TRUE) else NA
+      mean_incrate_chain <- if (!all(is.na(t_y_star_chain))) mean(t_y_star_chain, na.rm = TRUE) else NA
+      mean_absinc_fixed <- if (!all(is.na(abs_increase_fixed))) mean(abs_increase_fixed, na.rm = TRUE) else NA
+      mean_devrate_fixed <- if (!all(is.na(t_y_fixed))) mean(t_y_fixed, na.rm = TRUE) else NA
+      mean_incrate_fixed <- if (!all(is.na(t_y_star_fixed))) mean(t_y_star_fixed, na.rm = TRUE) else NA
+
+      sd_absinc_chain <- if (length(abs_increase_chain[!is.na(abs_increase_chain)]) > 1) {
+        sd(abs_increase_chain, na.rm = TRUE)
+      } else {
+        NA
+      }
+      sd_devrate_chain <- if (length(t_y_chain[!is.na(t_y_chain)]) > 1) {
+        sd(t_y_chain, na.rm = TRUE)
+      } else {
+        NA
+      }
+      sd_incrate_chain <- if (length(t_y_star_chain[!is.na(t_y_star_chain)]) > 1) {
+        sd(t_y_star_chain, na.rm = TRUE)
+      } else {
+        NA
+      }
+      sd_absinc_fixed <- if (length(abs_increase_fixed[!is.na(abs_increase_fixed)]) > 1) {
+        sd(abs_increase_fixed, na.rm = TRUE)
+      } else {
+        NA
+      }
+      sd_devrate_fixed <- if (length(t_y_fixed[!is.na(t_y_fixed)]) > 1) {
+        sd(t_y_fixed, na.rm = TRUE)
+      } else {
+        NA
+      }
+      sd_incrate_fixed <- if (length(t_y_star_fixed[!is.na(t_y_star_fixed)]) > 1) {
+        sd(t_y_star_fixed, na.rm = TRUE)
+      } else {
+        NA
+      }
+
+      # Rate of change (existing ROC, for consistency with original function)
+      roc <- if (n > 1 && all(y[1:(n - 1)] != 0)) {
+        (y[2:n] - y[1:(n - 1)]) / y[1:(n - 1)] * 100
+      } else {
+        warning("Zero values in denominator for ROC. Returning NA.")
+        rep(NA, n - 1)
+      }
+      roc_stats <- if (!all(is.na(roc))) {
+        c(
+          mean(roc, na.rm = TRUE),
+          sd(roc, na.rm = TRUE),
+          min(roc, na.rm = TRUE),
+          max(roc, na.rm = TRUE)
+        )
+      } else {
+        rep(NA, 4)
+      }
+
+      # Advanced metrics (skipped if skip_advanced = TRUE and n is small)
+      trend_slope <- trend_strength <- NA
+      if (!skip_advanced || n >= 10) {
+        # Time index for regression
+        time_index <- as.numeric(difftime(.x[[as.character(date_col)]], min(.x[[as.character(date_col)]]), units = "days"))
+
+        # Trend strength
+        trend_model <- try(stats::lm(value ~ time_index, data = .x), silent = TRUE)
+        if (!inherits(trend_model, "try-error")) {
+          trend_slope <- try(stats::coef(trend_model)[2], silent = TRUE)
+          if (!inherits(trend_slope, "try-error")) {
+            trend_fit <- try(stats::predict(trend_model), silent = TRUE)
+            if (!inherits(trend_fit, "try-error")) {
+              detrended <- y - trend_fit
+              trend_strength <- try(1 - stats::var(detrended) / stats::var(y), silent = TRUE)
+              if (inherits(trend_strength, "try-error")) trend_strength <- NA
+            }
+          }
+        }
+      }
+
+      garch_vol <- NA
+      if (!skip_advanced || n >= 30) {
+        garch_vol <- try(
+          {
+            if (requireNamespace("rugarch", quietly = TRUE) && n >= 30) {
+              suppressWarnings({
+                spec <- rugarch::ugarchspec(
+                  mean.model = list(armaOrder = c(1, 0)),
+                  variance.model = list(model = "sGARCH", garchOrder = c(1, 1))
+                )
+                garch_fit <- rugarch::ugarchfit(spec, y, solver = "hybrid")
+                mean(rugarch::sigma(garch_fit), na.rm = TRUE)
+              })
+            } else {
+              warning("Sample size < 30 or 'rugarch' package missing for GARCH. Returning NA.")
+              NA
+            }
+          },
+          silent = TRUE
+        )
+        if (inherits(garch_vol, "try-error")) {
+          warning("GARCH fitting failed. Returning NA.")
+          garch_vol <- NA
+        }
+      }
+
+      dom_freq <- NA
+      if (!skip_advanced || n >= 10) {
+        dom_freq <- try(
+          {
+            freq <- stats::spectrum(y, plot = FALSE)
+            freq$freq[which.max(freq$spec)]
+          },
+          silent = TRUE
+        )
+        if (inherits(dom_freq, "try-error")) dom_freq <- NA
+      }
+
+      shannon_entropy <- NA
+      if (!skip_advanced || n >= 5) {
+        shannon_entropy <- try(
+          {
+            if (requireNamespace("entropy", quietly = TRUE) && n >= 5) {
+              breaks <- pretty(range(y), n = min(10, n / 5))
+              binned <- cut(y, breaks, include.lowest = TRUE)
+              counts <- table(binned)
+              entropy::entropy(counts / sum(counts))
+            } else {
+              warning("Sample size < 5 or 'entropy' package missing for Shannon entropy. Returning NA.")
+              NA
+            }
+          },
+          silent = TRUE
+        )
+        if (inherits(shannon_entropy, "try-error")) shannon_entropy <- NA
+      }
+
+      acf_lag1 <- NA
+      pacf_lag1 <- NA
+      if (!skip_advanced || n >= 3) {
+        acf_lag1 <- try(
+          {
+            acf_result <- stats::acf(y, lag.max = 1, plot = FALSE, na.action = stats::na.pass)
+            acf_result$acf[2]
+          },
+          silent = TRUE
+        )
+        if (inherits(acf_lag1, "try-error")) acf_lag1 <- NA
+
+        pacf_lag1 <- try(
+          {
+            pacf_result <- stats::pacf(y, lag.max = 1, plot = FALSE, na.action = stats::na.pass)
+            pacf_result$acf[1]
+          },
+          silent = TRUE
+        )
+        if (inherits(pacf_lag1, "try-error")) pacf_lag1 <- NA
+      }
+
+      ljung_pval <- NA
+      if (!skip_advanced || n >= 3) {
+        ljung_pval <- try(
+          {
+            if (n >= 3) {
+              test <- stats::Box.test(y, lag = min(10, n - 1), type = "Ljung-Box")
+              test$p.value
+            } else {
+              warning("Sample size < 3 for Ljung-Box test. Returning NA.")
+              NA
+            }
+          },
+          silent = TRUE
+        )
+        if (inherits(ljung_pval, "try-error")) ljung_pval <- NA
+      }
+
+      adf_result <- c(NA, NA)
+      if (!skip_advanced || n >= 10) {
+        adf_result <- try(
+          {
+            if (requireNamespace("tseries", quietly = TRUE) && n >= 10) {
+              suppressWarnings({
+                test <- tseries::adf.test(y)
+                c(test$p.value, test$statistic)
+              })
+            } else {
+              warning("Sample size < 10 or 'tseries' package missing for ADF test. Returning NA.")
+              c(NA, NA)
+            }
+          },
+          silent = TRUE
+        )
+        if (inherits(adf_result, "try-error")) adf_result <- c(NA, NA)
+      }
+
+      kpss_result <- c(NA, NA)
+      if (!skip_advanced || n >= 10) {
+        kpss_result <- try(
+          {
+            if (requireNamespace("tseries", quietly = TRUE) && n >= 10) {
+              suppressWarnings({
+                test <- tseries::kpss.test(y)
+                c(test$p.value, test$statistic)
+              })
+            } else {
+              warning("Sample size < 10 or 'tseries' package missing for KPSS test. Returning NA.")
+              c(NA, NA)
+            }
+          },
+          silent = TRUE
+        )
+        if (inherits(kpss_result, "try-error")) kpss_result <- c(NA, NA)
+      }
+
+      hurst <- NA
+      if (!skip_advanced || n >= 20) {
+        hurst <- try(
+          {
+            if (requireNamespace("pracma", quietly = TRUE) && n >= 20) {
+              temp <- capture.output({
+                h_result <- pracma::hurstexp(y, display = FALSE)
+              })
+              h_result$Hs
+            } else {
+              warning("Sample size < 20 or 'pracma' package missing for Hurst exponent. Returning NA.")
+              NA
+            }
+          },
+          silent = TRUE
+        )
+        if (inherits(hurst, "try-error")) hurst <- NA
+      }
+
+      lyap <- NA
+      if (!skip_advanced || n >= 30) {
+        lyap <- try(
+          {
+            if (requireNamespace("fractal", quietly = TRUE) && n >= 30) {
+              fractal::lyapunov(y)
+            } else {
+              warning("Sample size < 30 or 'fractal' package missing for Lyapunov exponent. Returning NA.")
+              NA
+            }
+          },
+          silent = TRUE
+        )
+        if (inherits(lyap, "try-error")) lyap <- NA
+      }
+
       # Compile results
-      dplyr::tibble(
+      result_tibble <- dplyr::tibble(
         Metric = c(
           "Length of Series", "Mean", "Median", "Standard Deviation", "Variance", "Min", "Max", "Range",
           "Q1 (25th Percentile)", "Q3 (75th Percentile)", "Skewness", "Kurtosis", "CV (SD/Mean)",
-          "Missing Count", "Outlier Count", "Mean Rate of Change (%)", "SD Rate of Change (%)",
-          "Min ROC (%)", "Max ROC (%)", "Trend Slope", "Trend Strength", "ADF p-value", "ADF statistic",
+          "Missing Count", "Outlier Count",
+          "Mean Abs Increase (Chain)", "Mean Growth Rate (Chain, Coeff)", "Mean Rate of Increase (Chain, %)",
+          "Mean Abs Increase (Fixed)", "Mean Growth Rate (Fixed, Coeff)", "Mean Rate of Increase (Fixed, %)",
+          "SD Abs Increase (Chain)", "SD Growth Rate (Chain, Coeff)", "SD Rate of Increase (Chain, %)",
+          "SD Abs Increase (Fixed)", "SD Growth Rate (Fixed, Coeff)", "SD Rate of Increase (Fixed, %)",
+          "Geometric Mean Growth Rate (Coeff)", "Geometric Mean Growth Rate (%)", "Mean Rate of Increase (T̅′, Coeff)", "Mean Rate of Increase (T̅′, %)",
+          "Mean Rate of Change (%)", "SD Rate of Change (%)", "Min ROC (%)", "Max ROC (%)",
+          "Trend Slope", "Trend Strength", "ADF p-value", "ADF statistic",
           "KPSS p-value", "KPSS statistic", "ACF Lag 1", "PACF Lag 1", "Ljung-Box p-value",
           "Hurst Exponent", "GARCH Volatility", "Shannon Entropy", "Dominant Frequency", "Lyapunov Exponent"
         ),
         Value = tryCatch(
           {
             c(
-              n,
-              mean(.x$value, na.rm = TRUE),
-              stats::median(.x$value, na.rm = TRUE),
-              stats::sd(.x$value, na.rm = TRUE),
-              stats::var(.x$value, na.rm = TRUE),
-              min(.x$value, na.rm = TRUE),
-              max(.x$value, na.rm = TRUE),
-              diff(range(.x$value, na.rm = TRUE)),
-              stats::quantile(.x$value, 0.25, na.rm = TRUE),
-              stats::quantile(.x$value, 0.75, na.rm = TRUE),
-              if (requireNamespace("moments", quietly = TRUE)) moments::skewness(.x$value, na.rm = TRUE) else NA,
-              if (requireNamespace("moments", quietly = TRUE)) moments::kurtosis(.x$value, na.rm = TRUE) else NA,
-              if (mean(.x$value, na.rm = TRUE) != 0) stats::sd(.x$value, na.rm = TRUE) / abs(mean(.x$value, na.rm = TRUE)) else NA,
-              missing_count,
-              outlier_count,
+              n, mean_val, median_val, sd_val, var_val, min_val, max_val, range_val,
+              q1_val, q3_val, skewness_val, kurtosis_val, cv_val,
+              missing_count, outlier_count,
+              mean_absinc_chain, mean_devrate_chain, mean_incrate_chain,
+              mean_absinc_fixed, mean_devrate_fixed, mean_incrate_fixed,
+              sd_absinc_chain, sd_devrate_chain, sd_incrate_chain,
+              sd_absinc_fixed, sd_devrate_fixed, sd_incrate_fixed,
+              geom_mean_growth, geom_mean_growth_pct, mean_incrate, mean_incrate_pct,
               roc_stats[1], roc_stats[2], roc_stats[3], roc_stats[4],
-              trend_slope,
-              trend_strength,
+              trend_slope, trend_strength,
               adf_result[1], adf_result[2],
               kpss_result[1], kpss_result[2],
-              acf_lag1,
-              pacf_lag1,
-              ljung_pval,
-              hurst,
-              garch_vol,
-              shannon_entropy,
-              dom_freq,
-              lyap
+              acf_lag1, pacf_lag1, ljung_pval,
+              hurst, garch_vol, shannon_entropy, dom_freq, lyap
             )
           },
           error = function(e) {
             warning("Error in calculating statistics: ", e$message)
-            rep(NA, 33)
+            rep(NA, 49)
           }
         )
       )
-    }, .keep = TRUE) %>%
-    dplyr::bind_rows(.id = "group") %>%
-    dplyr::mutate(Value = round(as.numeric(Value), 4))
+
+      return(result_tibble)
+    }, .keep = TRUE)
+
+  # Bind results with proper group labels
+  if (!is.null(group_cols)) {
+    result <- dplyr::bind_rows(result, .id = "group_idx") %>%
+      dplyr::mutate(group = group_labels[as.integer(group_idx)]) %>%
+      dplyr::select(-group_idx) # Remove group_idx
+  } else {
+    result <- dplyr::bind_rows(result)
+  }
+
+  # Convert to wide format if requested
+  if (wide_format) {
+    result <- result %>%
+      tidyr::pivot_wider(names_from = Metric, values_from = Value, names_repair = "minimal")
+  } else {
+    result <- result %>%
+      dplyr::mutate(Value = round(as.numeric(Value), round_digits))
+  }
 
   return(result)
 }
 
 # Function for time series metrics
-
-kk_time_metrics <- function(data, value_col = NULL, date_col = NULL, group_cols = NULL, date_format = "auto", date_pattern = NULL) {
-  # Load required packages
-  required_pkgs <- c("dplyr", "lubridate", "stats", "nortest")
-  missing_pkgs <- required_pkgs[!sapply(required_pkgs, requireNamespace, quietly = TRUE)]
-  if (length(missing_pkgs) > 0) {
-    warning(sprintf("Missing packages: %s", paste(missing_pkgs, collapse = ", ")))
-  }
-
+kk_time_metrics <- function(data, value_col = NULL, date_col = "date", group_cols = NULL) {
   # Validate data input
   if (missing(data)) {
     stop("Argument 'data' is missing, with no default")
@@ -1458,66 +1567,15 @@ kk_time_metrics <- function(data, value_col = NULL, date_col = NULL, group_cols 
     data <- dplyr::mutate(data, value = !!value_col)
   }
 
-  # Auto-detect date column if not specified
-  if (is.null(date_col) && date_format == "auto") {
-    potential_date_cols <- c("date", "year_week", "time", "year_month", "year_quarter")
-    date_col <- potential_date_cols[potential_date_cols %in% names(data)][1]
-    if (!is.na(date_col)) {
-      date_col <- rlang::sym(date_col)
-      if (date_col == "date") {
-        date_format <- "date"
-      } else if (date_col == "year_week") {
-        date_format <- "year_week_string"
-      } else if (date_col == "year_month") {
-        date_format <- "year_month_string"
-      } else if (date_col == "year_quarter") {
-        date_format <- "year_quarter_string"
-      } else {
-        date_format <- "date"
-      }
-    }
+  # Validate date column
+  if (!date_col %in% names(data)) {
+    stop(sprintf("Date column '%s' not found in data. Available columns: %s", date_col, paste(names(data), collapse = ", ")))
   }
-
-  # Handle date formats
-  if (date_format == "date" && !is.null(date_col)) {
-    if (is.character(date_col)) date_col <- rlang::sym(date_col)
-    data <- dplyr::mutate(data, date = !!date_col)
-  } else if (date_format == "year_month" && all(c("year", "month") %in% names(data))) {
-    data <- dplyr::mutate(data, date = lubridate::ymd(paste(year, month, "01", sep = "-")))
-  } else if (date_format == "year_week" && all(c("year", "week") %in% names(data))) {
-    data <- dplyr::mutate(data, date = lubridate::make_date(year) + lubridate::weeks(week - 1))
-  } else if (date_format == "year_quarter" && all(c("year", "quarter") %in% names(data))) {
-    data <- dplyr::mutate(data, date = lubridate::yq(paste(year, quarter, sep = "-Q")))
-  } else if (date_format == "year_week_string" && !is.null(date_col)) {
-    if (is.character(date_col)) date_col <- rlang::sym(date_col)
-    data <- dplyr::mutate(data, date = {
-      year_week <- gsub("W|-", "-", as.character(!!date_col))
-      parts <- strsplit(year_week, "-")
-      year <- as.integer(sapply(parts, `[`, 1))
-      week <- as.integer(gsub("^0+", "", sapply(parts, `[`, 2)))
-      lubridate::make_date(year) + lubridate::weeks(week - 1)
-    })
-  } else if (date_format == "year_month_string" && !is.null(date_col)) {
-    if (is.character(date_col)) date_col <- rlang::sym(date_col)
-    data <- dplyr::mutate(data, date = lubridate::ym(as.character(!!date_col)))
-  } else if (date_format == "year_quarter_string" && !is.null(date_col)) {
-    if (is.character(date_col)) date_col <- rlang::sym(date_col)
-    data <- dplyr::mutate(data, date = lubridate::yq(as.character(!!date_col)))
-  } else if (date_format == "custom" && !is.null(date_col) && !is.null(date_pattern)) {
-    if (is.character(date_col)) date_col <- rlang::sym(date_col)
-    data <- dplyr::mutate(data, date = lubridate::parse_date_time(!!date_col, orders = date_pattern))
-  } else if ("date" %in% names(data)) {
-    # Fallback to existing date column
-  } else {
-    stop("Unable to identify a valid date column. Specify date_col and date_format (auto, date, year_month, year_week, year_quarter, year_week_string, year_month_string, year_quarter_string, custom) or ensure 'date' column exists. Available columns: ", paste(names(data), collapse = ", "))
-  }
+  if (is.character(date_col)) date_col <- rlang::sym(date_col)
 
   # Ensure date is proper format
-  if (!inherits(data$date, c("Date", "POSIXct"))) {
-    data$date <- try(as.Date(data$date), silent = TRUE)
-    if (inherits(data$date, "try-error") || !inherits(data$date, c("Date", "POSIXct"))) {
-      stop("Unable to convert 'date' to Date or POSIXct. Check date_format, date_col, or date_pattern. Sample values: ", paste(head(data[[as.character(date_col)]], 3), collapse = ", "))
-    }
+  if (!inherits(data[[date_col]], c("Date", "POSIXct"))) {
+    stop(sprintf("Column '%s' must be of class Date or POSIXct. Current class: %s", date_col, class(data[[date_col]])[1]))
   }
 
   # Handle grouping
@@ -1528,15 +1586,15 @@ kk_time_metrics <- function(data, value_col = NULL, date_col = NULL, group_cols 
 
   # Process time series for each group
   result <- data %>%
-    dplyr::arrange(date) %>%
+    dplyr::arrange(!!date_col) %>%
     dplyr::filter(!is.na(value)) %>%
     dplyr::group_map(~ {
-      # Extract values, time index, and year_week
+      # Extract values, time index, and period
       y <- .x$value
       n <- length(y)
       if (n < 2) stop("Insufficient data points for time series analysis")
       time_index <- 1:n
-      year_week <- .x[[as.character(date_col)]][order(.x[[as.character(date_col)]])]
+      period <- .x[[as.character(date_col)]][order(.x[[as.character(date_col)]])]
 
       # Autocorrelation coefficient r1
       r1 <- if (n > 1) {
@@ -1583,14 +1641,35 @@ kk_time_metrics <- function(data, value_col = NULL, date_col = NULL, group_cols 
 
       # Chain base metrics per period
       abs_increase_chain <- if (n > 1) c(NA, diff(y)) else rep(NA, n)
-      t_y_chain <- if (n > 1) c(NA, (y[2:n] / y[1:(n - 1)]) * 100) else rep(NA, n)
-      t_y_star_chain <- if (n > 1) c(NA, (y[2:n] / y[1:(n - 1)]) * 100 - 100) else rep(NA, n)
+      t_y_chain <- if (n > 1) c(NA, (y[2:n] / y[1:(n - 1)])) else rep(NA, n) # Coefficient form
+      t_y_star_chain <- if (n > 1) c(NA, ((y[2:n] / y[1:(n - 1)]) - 1) * 100) else rep(NA, n) # Percentage form
 
       # Fixed base period metrics per period (using first non-NA value as base)
       base_value <- y[1]
       abs_increase_fixed <- if (n > 0) y - base_value else rep(NA, n)
-      t_y_fixed <- if (n > 0) (y / base_value) * 100 else rep(NA, n)
-      t_y_star_fixed <- if (n > 0) (y / base_value) * 100 - 100 else rep(NA, n)
+      t_y_fixed <- if (n > 0) (y / base_value) else rep(NA, n) # Coefficient form
+      t_y_star_fixed <- if (n > 0) ((y / base_value) - 1) * 100 else rep(NA, n) # Percentage form
+
+      # Geometric mean growth rate (chain-base, coefficient form)
+      t_y_chain_coeff <- t_y_chain[!is.na(t_y_chain)]
+      geom_mean_growth <- if (length(t_y_chain_coeff) > 0) {
+        exp(mean(log(t_y_chain_coeff), na.rm = TRUE))
+      } else {
+        NA
+      }
+      geom_mean_growth_pct <- (geom_mean_growth - 1) * 100 # Percentage form
+
+      # Standard deviation of chain-base growth rates (in coefficient form)
+      t_y_chain_sd <- if (length(t_y_chain_coeff) > 1) {
+        sd(t_y_chain_coeff, na.rm = TRUE)
+      } else {
+        NA
+      }
+      t_y_chain_sd_pct <- t_y_chain_sd * 100 # Percentage form
+
+      # Mean rate of increase (T̅′) based on geometric mean growth rate
+      mean_incrate <- geom_mean_growth - 1 # Coefficient form
+      mean_incrate_pct <- geom_mean_growth_pct # Percentage form
 
       # Compute means for chain base metrics
       abs_increase_chain_mean <- if (!all(is.na(abs_increase_chain))) mean(abs_increase_chain, na.rm = TRUE) else NA
@@ -1602,13 +1681,21 @@ kk_time_metrics <- function(data, value_col = NULL, date_col = NULL, group_cols 
       t_y_fixed_mean <- if (!all(is.na(t_y_fixed))) mean(t_y_fixed, na.rm = TRUE) else NA
       t_y_star_fixed_mean <- if (!all(is.na(t_y_star_fixed))) mean(t_y_star_fixed, na.rm = TRUE) else NA
 
-      # Create per-period tibbles with year_week as period
-      abs_increase_chain_df <- dplyr::tibble(period = year_week, value = round(abs_increase_chain, 4))
-      t_y_chain_df <- dplyr::tibble(period = year_week, value = round(t_y_chain, 4))
-      t_y_star_chain_df <- dplyr::tibble(period = year_week, value = round(t_y_star_chain, 4))
-      abs_increase_fixed_df <- dplyr::tibble(period = year_week, value = round(abs_increase_fixed, 4))
-      t_y_fixed_df <- dplyr::tibble(period = year_week, value = round(t_y_fixed, 4))
-      t_y_star_fixed_df <- dplyr::tibble(period = year_week, value = round(t_y_star_fixed, 4))
+      # Compute standard deviations for per-period metrics
+      abs_increase_chain_sd <- if (!all(is.na(abs_increase_chain))) sd(abs_increase_chain, na.rm = TRUE) else NA
+      t_y_chain_sd <- if (!all(is.na(t_y_chain))) sd(t_y_chain, na.rm = TRUE) else NA
+      t_y_star_chain_sd <- if (!all(is.na(t_y_star_chain))) sd(t_y_star_chain, na.rm = TRUE) else NA
+      abs_increase_fixed_sd <- if (!all(is.na(abs_increase_fixed))) sd(abs_increase_fixed, na.rm = TRUE) else NA
+      t_y_fixed_sd <- if (!all(is.na(t_y_fixed))) sd(t_y_fixed, na.rm = TRUE) else NA
+      t_y_star_fixed_sd <- if (!all(is.na(t_y_star_fixed))) sd(t_y_star_fixed, na.rm = TRUE) else NA
+
+      # Create per-period tibbles with period as date
+      abs_increase_chain_df <- dplyr::tibble(period = period, value = round(abs_increase_chain, 4))
+      t_y_chain_df <- dplyr::tibble(period = period, value = round(t_y_chain, 4))
+      t_y_star_chain_df <- dplyr::tibble(period = period, value = round(t_y_star_chain, 4))
+      abs_increase_fixed_df <- dplyr::tibble(period = period, value = round(abs_increase_fixed, 4))
+      t_y_fixed_df <- dplyr::tibble(period = period, value = round(t_y_fixed, 4))
+      t_y_star_fixed_df <- dplyr::tibble(period = period, value = round(t_y_star_fixed, 4))
 
       # Create a wide-format tibble with simplified lowercase names
       descriptive <- dplyr::tibble(
@@ -1625,6 +1712,16 @@ kk_time_metrics <- function(data, value_col = NULL, date_col = NULL, group_cols 
         mean_absinc_fixed = abs_increase_fixed_mean,
         mean_devrate_fixed = t_y_fixed_mean,
         mean_incrate_fixed = t_y_star_fixed_mean,
+        sd_absinc_chain = abs_increase_chain_sd,
+        sd_devrate_chain = t_y_chain_sd,
+        sd_incrate_chain = t_y_star_chain_sd,
+        sd_absinc_fixed = abs_increase_fixed_sd,
+        sd_devrate_fixed = t_y_fixed_sd,
+        sd_incrate_fixed = t_y_star_fixed_sd,
+        geom_mean_growth = geom_mean_growth,
+        geom_mean_growth_pct = geom_mean_growth_pct,
+        mean_incrate = mean_incrate,
+        mean_incrate_pct = mean_incrate_pct,
         per_absinc_chain = list(abs_increase_chain_df),
         per_devrate_chain = list(t_y_chain_df),
         per_incrate_chain = list(t_y_star_chain_df),
