@@ -11,6 +11,16 @@ options(ggplot2.messages = FALSE)
 options(dplyr.width = Inf)
 ###### ---Functions---######
 
+# Function to format a tibble with numeric values for display
+format_tibble <- function(data, digits = 2) {
+  data %>%
+    mutate(
+      Value_display = sapply(Value, function(x) {
+        if (is.na(x)) "NA" else format(round(x, digits), nsmall = digits, scientific = FALSE, big.mark = ",")
+      })
+    )
+}
+
 # Function to round numeric columns in a tibble
 
 mutate_round <- function(data, digits = 2) {
