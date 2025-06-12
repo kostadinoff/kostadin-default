@@ -180,6 +180,174 @@ compare_proportions <- function(data,
   return(results)
 }
 
+# Function for EGN
+
+extract_age_from_egn <- function(egn, admission_date = Sys.Date()) {
+    # Define region codes based on Bulgarian EGN rules
+    region_codes <- list(
+        "000-043" = "Blagoevgrad", "044-093" = "Burgas", "094-139" = "Varna",
+        "140-169" = "Veliko Tarnovo", "170-183" = "Vidin", "184-217" = "Vratsa",
+        "218-233" = "Gabrovo", "234-281" = "Kardzhali", "282-301" = "Kyustendil",
+        "302-319" = "Lovech", "320-341" = "Montana", "342-377" = "Pazardzhik",
+        "378-395" = "Pernik", "396-435" = "Pleven", "436-501" = "Plovdiv",
+        "502-527" = "Razgrad", "528-555" = "Ruse", "556-575" = "Silistra",
+        "576-601" = "Sliven", "602-623" = "Smolyan", "624-721" = "Sofia City",
+        "722-751" = "Sofia Province", "752-789" = "Stara Zagora", "790-821" = "Dobrich",
+        "822-843" = "Targovishte", "844-871" = "Haskovo", "872-903" = "Shumen",
+        "904-925" = "Yambol", "926-999" = "Other/Unknown"
+    )
+    
+    # Define weights for control digit validation
+    weights <- c(2, 4, 8, 5, 10, 9, 7, 3, 6)
+    
+    # Convert inputs to vectors
+    egn <- as.character(egn)
+    admission_date <- as.Date(admission_date)
+    
+    # Initialize result data frame
+    result <- data.frame(
+        age = numeric(length(egn)),
+        birth_date = as.Date(character(length(egn))),
+        is_valid = logical(length(egn)),
+        gender = character(length(egn)),
+        region = character(length(egn)),
+        birth_order = numeric(length(egn)),
+        stringsAsFactors = FALSE
+    )
+    
+    for (i in seq_along(egn)) {
+        output <- list(
+            age = NA_real_,
+            birth_date = as.Date(NA),
+            is_valid = FALSE,
+            gender = NA_character_,
+            region = NA_character_,
+            birth_order = NA_real_
+        )
+        
+        egn_length <- nchar(egn[i])
+        
+        # Process 6-digit EGN (partial date)
+        if (egn_length == 6) {
+            year <- as.numeric(substr(egn[i], 1, 2))
+            month <- as.numeric(substr(egn[i], 3, 4))
+            day <- as.numeric(substr(egn[i], 5, 6))
+            
+            # Apply the same century logic as 10-digit EGNs
+            month_indicator <- month
+            if (month_indicator >= 41 && month_indicator <= 52) {
+                year <- year + 2000
+                month <- month - 40
+            } else if (month_indicator >= 21 && month_indicator <= 32) {
+                year <- year + 1800
+                month <- month - 20
+            } else if (month_indicator >= 1 && month_indicator <= 12) {
+                year <- year + 1900
+            } else {
+                # Invalid month, skip this EGN
+                result[i, ] <- output
+                next
+            }
+            
+            # Try to create valid date
+            output$birth_date <- tryCatch(
+                as.Date(paste(year, month, day, sep = "-"), format = "%Y-%m-%d"),
+                error = function(e) as.Date(NA)
+            )
+            
+            # If day is invalid, try with day = 1 (first day of month)
+            if (is.na(output$birth_date)) {
+                output$birth_date <- tryCatch(
+                    as.Date(paste(year, month, "01", sep = "-"), format = "%Y-%m-%d"),
+                    error = function(e) as.Date(NA)
+                )
+            }
+            
+            if (!is.na(output$birth_date)) {
+                current_admission_date <- if (length(admission_date) == 1) admission_date else admission_date[i]
+                output$age <- floor(as.numeric(difftime(current_admission_date, output$birth_date, units = "days")) / 365.25)
+                output$is_valid <- TRUE  # Mark as valid for 6-digit (we can't validate control digit)
+            }
+            
+            result[i, ] <- output
+            next
+        }
+        
+        # Process 10-digit EGN
+        if (egn_length == 10 && grepl("^\\d+$", egn[i])) {
+            year <- as.numeric(substr(egn[i], 1, 2))
+            month <- as.numeric(substr(egn[i], 3, 4))
+            day <- as.numeric(substr(egn[i], 5, 6))
+            
+            month_indicator <- month
+            if (month_indicator >= 41 && month_indicator <= 52) {
+                year <- year + 2000
+                month <- month - 40
+            } else if (month_indicator >= 21 && month_indicator <= 32) {
+                year <- year + 1800
+                month <- month - 20
+            } else if (month_indicator >= 1 && month_indicator <= 12) {
+                year <- year + 1900
+            } else {
+                warning(paste("Invalid month in EGN at index", i, ":", egn[i]))
+                result[i, ] <- output
+                next
+            }
+            
+            output$birth_date <- tryCatch(
+                as.Date(paste(year, month, day, sep = "-"), format = "%Y-%m-%d"),
+                error = function(e) as.Date(NA)
+            )
+            
+            if (is.na(output$birth_date)) {
+                result[i, ] <- output
+                next
+            }
+            
+            current_admission_date <- if (length(admission_date) == 1) admission_date else admission_date[i]
+            output$age <- floor(as.numeric(difftime(current_admission_date, output$birth_date, units = "days")) / 365.25)
+            
+            digits <- as.numeric(strsplit(egn[i], "")[[1]])
+            weighted_sum <- sum(digits[1:9] * weights)
+            control_digit <- weighted_sum %% 11
+            control_digit <- if (control_digit == 10) 0 else control_digit
+            output$is_valid <- control_digit == digits[10]
+            
+            ninth_digit <- as.numeric(substr(egn[i], 9, 9))
+            output$gender <- if (ninth_digit %% 2 == 0) "Male" else "Female"
+            
+            # Calculate birth order based on the 3-digit code
+            three_digit_code <- as.numeric(substr(egn[i], 7, 9))
+            
+            # Birth order calculation: 
+            # The 9th digit indicates gender and order within that gender
+            # For males (even 9th digit): birth_order = (9th_digit / 2) + 1
+            # For females (odd 9th digit): birth_order = ((9th_digit + 1) / 2)
+            if (ninth_digit %% 2 == 0) {
+                # Male: 0,2,4,6,8 correspond to 1st, 2nd, 3rd, 4th, 5th male born that day
+                output$birth_order <- (ninth_digit / 2) + 1
+            } else {
+                # Female: 1,3,5,7,9 correspond to 1st, 2nd, 3rd, 4th, 5th female born that day
+                output$birth_order <- ((ninth_digit + 1) / 2)
+            }
+            
+            output$region <- "Other/Unknown"
+            
+            for (range in names(region_codes)) {
+                range_bounds <- as.numeric(unlist(strsplit(range, "-")))
+                if (three_digit_code >= range_bounds[1] && three_digit_code <= range_bounds[2]) {
+                    output$region <- region_codes[[range]]
+                    break
+                }
+            }
+        }
+        
+        result[i, ] <- output
+    }
+    
+    return(result)
+}
+
 
 # Function to calculate the proportion stratified by a grouping variable
 
