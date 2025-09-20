@@ -2,10 +2,20 @@
 
 if (!require(pacman)) install.packages("pacman")
 
-# Core packages that are used throughout
-pacman::p_load(tidyverse, rlang, broom)
+# Essential packages used throughout the script
+# Loading these globally since they're used in multiple functions
+pacman::p_load(
+  # Core tidyverse and data manipulation
+  tidyverse, rlang, broom, 
+  # Statistical packages frequently used
+  moments, janitor, emmeans, sandwich,
+  # Plotting essentials
+  ggthemes, scales, sysfonts,
+  # Basic statistical tests
+  nortest
+)
 
-# Helper function for conditional package loading
+# Helper function for conditional package loading of specialized packages
 require_packages <- function(packages, context = "this analysis") {
   missing_pkgs <- packages[!sapply(packages, requireNamespace, quietly = TRUE)]
   if (length(missing_pkgs) > 0) {
@@ -16,8 +26,6 @@ require_packages <- function(packages, context = "this analysis") {
   }
   invisible(TRUE)
 }
-
-# Load additional packages as needed within functions rather than globally
 
 ###### ---Options---######
 
@@ -292,11 +300,11 @@ compare_proportions <- function(data,
   }
 
   # Apply the calculate_difference function to each pair
-  results <- map_dfr(combinations, calculate_difference)
+  results <- purrr::map_dfr(combinations, calculate_difference)
 
   # Adjust p-values for multiple comparisons
   results <- results %>%
-    mutate(adj_p_value = p.adjust(p_value, method = method))
+    dplyr::mutate(adj_p_value = p.adjust(p_value, method = method))
 
   return(results)
 }
@@ -511,8 +519,8 @@ compare_proportions_by <- function(data,
     result_list <- list()
 
     for (pair in pairwise_comparisons) {
-      subgroup1 <- df %>% filter(!!sym(subgroup_var) == pair[1])
-      subgroup2 <- df %>% filter(!!sym(subgroup_var) == pair[2])
+      subgroup1 <- df %>% dplyr::filter(!!rlang::sym(subgroup_var) == pair[1])
+      subgroup2 <- df %>% dplyr::filter(!!rlang::sym(subgroup_var) == pair[2])
 
       # Ensure there is exactly one row in each subgroup
       if (nrow(subgroup1) != 1 || nrow(subgroup2) != 1) {
@@ -565,12 +573,12 @@ compare_proportions_by <- function(data,
   }
 
   # Apply the calculation function to each group
-  results <- map_dfr(grouped_data, calculate_difference_within_group)
+  results <- purrr::map_dfr(grouped_data, calculate_difference_within_group)
 
   # Adjust p-values for multiple comparisons if p_value column is correctly numeric
   if (nrow(results) > 0) {
     results <- results %>%
-      mutate(adj_p_value = p.adjust(p_value, method = method)) %>%
+      dplyr::mutate(adj_p_value = p.adjust(p_value, method = method)) %>%
       dplyr::select(
         group,
         subgroup1,
@@ -584,7 +592,7 @@ compare_proportions_by <- function(data,
       )
   } else {
     results <- results %>%
-      mutate(adj_p_value = NA) %>%
+      dplyr::mutate(adj_p_value = NA) %>%
       dplyr::select(
         group,
         subgroup1,
