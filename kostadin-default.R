@@ -119,34 +119,29 @@ pcit <- function(data, conf.level = 0.95) {
 
 # Function to compare proportions between groups
 
-# Needs: emmeans, sandwich, stats, dplyr, tibble, rlang
 compare_proportions_glm <- function(
-  data,
-  group,                # grouping factor to compare
-  x, n,                 # counts of "successes" and totals
-  by = NULL,            # optional stratifier (within-stratum pairwise)
-  covariates = NULL,    # optional vector of covariate column names for adjustment
-  adjust = "holm",      # p-adjust method for multiple pairwise tests
-  conf.level = 0.95,
-  vcov_type = "HC3",    # robust SE type for sandwich::vcovHC
-  drop_empty = TRUE     # drop strata with <2 groups
-) {
-  # Dependency checks
+    data, group, x, n,
+    by = NULL, covariates = NULL,
+    adjust = "holm", conf.level = 0.95,
+    vcov_type = "HC3", drop_empty = TRUE) {
   for (pkg in c("emmeans", "sandwich")) {
     if (!requireNamespace(pkg, quietly = TRUE)) {
       stop(sprintf("Package '%s' is required. Install it first.", pkg))
     }
   }
 
-  group <- dplyr::ensym(group)
-  x     <- dplyr::ensym(x)
-  n     <- dplyr::ensym(n)
-  by_   <- if (is.null(by)) NULL else dplyr::ensym(by)
+  group_sym <- dplyr::ensym(group)
+  x_sym <- dplyr::ensym(x)
+  n_sym <- dplyr::ensym(n)
+  by_sym <- if (is.null(by)) NULL else dplyr::ensym(by)
+
+  group_name <- rlang::as_string(group_sym)
+  by_name <- if (is.null(by_sym)) NULL else rlang::as_string(by_sym)
 
   df <- data |>
     dplyr::mutate(
-      .x = !!x,
-      .n = !!n,
+      .x = !!x_sym,
+      .n = !!n_sym,
       .fail = .n - .x
     )
 
@@ -154,68 +149,59 @@ compare_proportions_glm <- function(
     stop("Each 'n' must be >= 'x'.")
   }
 
-  # Build formula: cbind(x, n-x) ~ group (+ by) (+ covariates) (+ interactions if by)
-  rhs_terms <- rlang::as_string(group)
-  if (!is.null(by_)) rhs_terms <- paste(rhs_terms, rlang::as_string(by_), sep = " * ") # interaction allows within-stratum contrasts
+  rhs_terms <- group_name
+  if (!is.null(by_name)) rhs_terms <- paste(rhs_terms, by_name, sep = " * ")
   if (!is.null(covariates) && length(covariates)) {
     rhs_terms <- paste(rhs_terms, paste(covariates, collapse = " + "), sep = " + ")
   }
   fml <- stats::as.formula(paste0("cbind(.x, .fail) ~ ", rhs_terms))
 
-  fit <- stats::glm(
-    formula = fml,
-    family  = stats::binomial(link = "logit"),
-    data    = df
-  )
+  fit <- stats::glm(fml, family = stats::binomial("logit"), data = df)
 
-  # Robust VCOV
-  V <- sandwich::vcovHC(fit, type = vcov_type)
+  # robust VCOV with safe fallback if leverage ~1
+  V <- tryCatch(sandwich::vcovHC(fit, type = vcov_type), error = function(e) stats::vcov(fit))
+  hat <- tryCatch(stats::hatvalues(fit), error = function(e) rep(0, nrow(df)))
+  if (any(is.finite(hat) & hat > 0.99)) V <- stats::vcov(fit)
 
-  # emmeans grid
-  if (is.null(by_)) {
-    emm <- emmeans::emmeans(fit, specs = ~ !!group, vcov. = V)
-    # Regrid to response to get probabilities; then pairwise diffs on prob scale
+  if (is.null(by_name)) {
+    emm <- emmeans::emmeans(fit, specs = group_name, vcov. = V)
     emm_resp <- emmeans::regrid(emm, transform = "response")
     cmp <- emmeans::contrast(emm_resp, method = "pairwise", adjust = adjust)
-    out <- as.data.frame(emmeans::summary(cmp, infer = TRUE, level = conf.level))
-    # Standardize column names
-    out <- tibble::as_tibble(out) |>
-      dplyr::transmute(
-        group1   = contrast |> sub(" - .*", "", .),
-        group2   = contrast |> sub(".* - ", "", .),
-        estimate = estimate,      # difference in probabilities p1 - p2
-        conf_low = lower.CL,
-        conf_high= upper.CL,
-        p_value  = p.value,
-        adjust   = adjust,
-        conf_level = conf.level
-      )
+    out <- as.data.frame(summary(cmp, infer = TRUE, level = conf.level)) # <- no emmeans:: here
+    tibble::tibble(
+      group1     = sub(" - .*", "", out$contrast),
+      group2     = sub(".* - ", "", out$contrast),
+      estimate   = out$estimate,
+      conf_low   = out$lower.CL,
+      conf_high  = out$upper.CL,
+      p_value    = out$p.value,
+      adjust     = adjust,
+      conf_level = conf.level
+    )
   } else {
-    by_name <- rlang::as_string(by_)
-    emm <- emmeans::emmeans(fit, specs = list(group = ~ !!group, by = ~ !!by_), vcov. = V)
+    emm <- emmeans::emmeans(fit, specs = group_name, by = by_name, vcov. = V)
     emm_resp <- emmeans::regrid(emm, transform = "response")
     cmp <- emmeans::contrast(emm_resp, method = "pairwise", by = by_name, adjust = adjust)
-    tmp <- as.data.frame(emmeans::summary(cmp, infer = TRUE, level = conf.level))
-    out <- tibble::as_tibble(tmp) |>
-      dplyr::transmute(
-        !!by_name := .data[[by_name]],
-        group1   = contrast |> sub(" - .*", "", .),
-        group2   = contrast |> sub(".* - ", "", .),
-        estimate = estimate,
-        conf_low = lower.CL,
-        conf_high= upper.CL,
-        p_value  = p.value,
-        adjust   = adjust,
-        conf_level = conf.level
-      )
+    tmp <- as.data.frame(summary(cmp, infer = TRUE, level = conf.level)) # <- no emmeans::
+    out <- tibble::tibble(
+      !!by_name := tmp[[by_name]],
+      group1     = sub(" - .*", "", tmp$contrast),
+      group2     = sub(".* - ", "", tmp$contrast),
+      estimate   = tmp$estimate,
+      conf_low   = tmp$lower.CL,
+      conf_high  = tmp$upper.CL,
+      p_value    = tmp$p.value,
+      adjust     = adjust,
+      conf_level = conf.level
+    )
     if (drop_empty) {
-      out <- out |> dplyr::group_by(.data[[by_name]]) |>
+      out <- out |>
+        dplyr::group_by(.data[[by_name]]) |>
         dplyr::filter(dplyr::n() > 0) |>
         dplyr::ungroup()
     }
+    out
   }
-
-  out
 }
 
 
