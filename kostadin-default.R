@@ -594,46 +594,188 @@ compare_proportions_by <- function(data,
 
 ###### ---Define theme---######
 
-set_plot_font <- function(font = "Roboto Condensed", size = 18) {
-  # Try to add the Google font dynamically
-  tryCatch(
-    {
-      sysfonts::font_add_google(name = font, family = font, db_cache = FALSE)
-      message("Successfully loaded font: ", font)
-    },
-    error = function(e) {
-      message("Font '", font, "' not found on Google Fonts. Falling back to 'Arial'.")
-      # Use a pre-installed system font as fallback (no file path needed)
-      font <<- "Arial" # Update font variable to use Arial
-    }
-  )
+set_plot_font <- function(font = "Roboto Condensed", size = 18,
+                          search_sources = c("google", "system", "local"),
+                          fallbacks = c("Arial", "Helvetica", "sans"),
+                          update_theme = TRUE) {
+  # Input validation
+  if (!is.character(font) || length(font) != 1) {
+    stop("Font must be a single character string.")
+  }
 
-  # Define relative font sizes based on the `size` parameter
-  title_size <- size + 4
-  subtitle_size <- size + 2
-  caption_size <- size - 2
-  axis_title_size <- size
-  axis_text_size <- size
-  strip_text_size <- size
+  # Initialize tracking variables
+  font_family <- font
+  font_loaded <- FALSE
+  search_results <- list()
 
-  theme_nice <- ggthemes::theme_tufte() +
-    theme(
-      axis.ticks = element_line(linewidth = 0.5, color = "black"),
-      axis.ticks.length = unit(4, "mm"),
-      plot.title = element_text(family = font, size = title_size, hjust = 0, vjust = 2, margin = margin(t = 10, b = 10)),
-      plot.subtitle = element_text(family = font, size = subtitle_size),
-      plot.caption = element_text(family = font, hjust = 0.5, vjust = 1, size = caption_size),
-      plot.caption.position = "plot",
-      axis.title = element_text(family = font, size = axis_title_size),
-      axis.text = element_text(family = font, size = axis_text_size),
-      axis.text.x = element_text(margin = margin(5, b = 10)),
-      strip.text = element_text(family = font, size = strip_text_size),
-      axis.line = element_line()
+  # Helper function to test if font family is available
+  test_font <- function(family) {
+    families <- sysfonts::font_families()
+    return(family %in% families)
+  }
+
+  # Helper function to add font from Google Fonts
+  add_google_font <- function(family) {
+    tryCatch(
+      {
+        sysfonts::font_add_google(name = family, family = family, db_cache = FALSE)
+        return(test_font(family))
+      },
+      error = function(e) {
+        message(" ✗ Google Fonts: ", e$message)
+        return(FALSE)
+      }
+    )
+  }
+
+  # Helper function to check system fonts
+  check_system_font <- function(family) {
+    return(test_font(family))
+  }
+
+  # Helper function to search local font directories
+  search_local_fonts <- function(family) {
+    # Common font directories
+    font_dirs <- c(
+      file.path(Sys.getenv("WINDIR"), "Fonts"), # Windows
+      file.path(Sys.getenv("HOME"), ".fonts"), # User fonts
+      "/System/Library/Fonts", # macOS
+      "/Library/Fonts", # macOS
+      "/usr/share/fonts", # Linux
+      "/usr/local/share/fonts" # Linux
     )
 
-  theme_set(theme_nice)
-}
+    # Remove duplicates and non-existent dirs
+    font_dirs <- unique(font_dirs[dir.exists(font_dirs)])
 
+    # Common font file extensions
+    extensions <- c("ttf", "otf", "ttc")
+    pattern <- paste0("(?i)", family, ".*\\.(", paste(extensions, collapse = "|"), ")$")
+
+    # Search for font files
+    for (dir in font_dirs) {
+      font_files <- list.files(dir, pattern = pattern, full.names = TRUE, ignore.case = TRUE)
+
+      if (length(font_files) > 0) {
+        # Try to add the first matching font file
+        tryCatch(
+          {
+            sysfonts::font_add(family = family, regular = font_files[1])
+            if (test_font(family)) {
+              message(" ✓ Added '", family, "' from: ", basename(font_files[1]))
+              return(TRUE)
+            }
+          },
+          error = function(e) {
+            message(" ✗ Failed to add font from ", dir, ": ", e$message)
+          }
+        )
+      }
+    }
+
+    return(FALSE)
+  }
+
+  # Main search process
+  cat("🔍 Searching for font:", font, "\n")
+
+  # Search in specified order
+  for (source in search_sources) {
+    if (font_loaded) break
+
+    cat(" Checking", source, "source...\n")
+
+    result <- switch(source,
+      "google" = {
+        search_results[[source]] <- add_google_font(font)
+        search_results[[source]]
+      },
+      "system" = {
+        search_results[[source]] <- check_system_font(font)
+        search_results[[source]]
+      },
+      "local" = {
+        search_results[[source]] <- search_local_fonts(font)
+        search_results[[source]]
+      },
+      FALSE
+    )
+
+    if (result) {
+      font_loaded <- TRUE
+      message(" ✓ Found in ", source, " source!")
+      break
+    }
+  }
+
+  # Try fallback fonts if original not found
+  if (!font_loaded) {
+    cat(" No match found. Trying fallbacks...\n")
+    for (fb in fallbacks) {
+      cat(" Testing fallback:", fb, "\n")
+      if (check_system_font(fb)) {
+        font_family <- fb
+        font_loaded <- TRUE
+        message(" ✓ Using fallback: ", fb)
+        break
+      }
+    }
+  }
+
+  # Final fallback to system default
+  if (!font_loaded) {
+    font_family <- "sans"
+    message(" ⚠ Using system default 'sans'")
+  }
+
+  # Enable showtext for consistent font rendering
+  showtext::showtext_auto(enable = TRUE)
+  message("✓ Enabled showtext for font rendering")
+
+  # Create and set theme if requested
+  if (update_theme) {
+    # Define relative font sizes based on the `size` parameter
+    title_size <- size + 4
+    subtitle_size <- size + 2
+    caption_size <- size - 2
+    axis_title_size <- size
+    axis_text_size <- size
+    strip_text_size <- size
+
+    theme_nice <- ggthemes::theme_tufte() +
+      theme(
+        axis.ticks = element_line(linewidth = 0.5, color = "black"),
+        axis.ticks.length = unit(4, "mm"),
+        plot.title = element_text(family = font_family, size = title_size, hjust = 0, vjust = 2, margin = margin(t = 10, b = 10)),
+        plot.subtitle = element_text(family = font_family, size = subtitle_size),
+        plot.caption = element_text(family = font_family, hjust = 0.5, vjust = 1, size = caption_size),
+        plot.caption.position = "plot",
+        axis.title = element_text(family = font_family, size = axis_title_size),
+        axis.text = element_text(family = font_family, size = axis_text_size),
+        axis.text.x = element_text(margin = margin(5, b = 10)),
+        strip.text = element_text(family = font_family, size = strip_text_size),
+        axis.line = element_line()
+      )
+
+    theme_set(theme_nice)
+    message("✓ Updated ggplot2 theme with font '", font_family, "'")
+  }
+
+  # Return comprehensive results
+  result <- list(
+    requested = font,
+    used = font_family,
+    loaded = font_loaded,
+    source = if (font_family == font) "original" else "fallback",
+    search_sources = search_sources,
+    search_results = search_results,
+    size = size,
+    theme_updated = update_theme
+  )
+
+  message("✅ Font setup complete. Using: ", font_family)
+  return(invisible(result))
+}
 
 kkplot <- function(...) {
   ggplot(...) +
