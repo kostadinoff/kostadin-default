@@ -1,14 +1,51 @@
 ###### ---Libraries---######
 
-if (!require(pacman)) install.packages("pacman")
-pacman::p_load(tidyverse, haven, modelsummary, MKinfer, rstatix, finalfit, tinytable, monochromeR, ggstats, epitools, ggsurvfit, broom, rstan, brms, gtsummary, ggplot2, quantreg, patchwork, tidymodels, gt, epiR, readxl, scales, marginaleffects, moments, ggthemes, entropy, emmeans, janitor, nortest, easystats, showtext, tseries, rugarch, forecast, brglm2, sysfonts, pracma, zoo, detectseparation)
+# Improved version with error handling and better organization
+if (!requireNamespace("pacman", quietly = TRUE)) {
+  install.packages("pacman")
+}
+pacman::p_load(
+  # Core data manipulation
+  tidyverse, haven, janitor, readxl,
+
+  # Statistical modeling
+  modelsummary, brms, quantreg, tidymodels,
+  marginaleffects, emmeans, broom, brglm2,
+
+  # Descriptive statistics
+  rstatix, finalfit, gtsummary, moments,
+  nortest, tseries, rugarch, forecast,
+
+  # Visualization
+  ggplot2, ggstats, ggsurvfit, patchwork,
+  ggthemes, monochromeR, scales, showtext,
+  sysfonts,
+
+  # Specialized packages
+  MKinfer, tinytable, epitools, epiR, entropy,
+  easystats, detectseparation, pracma, zoo
+)
+
+# Check if all packages loaded successfully
+cat("Loaded", length(pacman::p_loaded()), "packages\n")
 
 ###### ---Options---######
 
+# Backend and parallel processing
 options(brms.backend = "cmdstanr")
-options(mc.cores = parallel::detectCores())
+options(mc.cores = parallel::detectCores() - 1) # Leave 1 core free
 options(ggplot2.messages = FALSE)
 options(dplyr.width = Inf)
+
+# Additional useful options
+options(scipen = 999) # Avoid scientific notation
+options(stringsAsFactors = FALSE) # Default to character for strings
+options(warn = 1) # Warnings as they occur (not at end)
+
+# Memory management (modern R approach)
+options(expressions = 5000) # Increase expression limit
+gc() # Force garbage collection at startup
+
 ###### ---Functions---######
 
 # Function to format a tibble with numeric values for display
