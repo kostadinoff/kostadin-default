@@ -729,8 +729,8 @@ set_plot_font <- function(font = "Roboto Condensed", size = 18,
   }
 
   # Enable showtext for consistent font rendering
-  showtext::showtext_auto(enable = TRUE)
-  message("✓ Enabled showtext for font rendering")
+  # showtext::showtext_auto(enable = TRUE)
+  # message("✓ Enabled showtext for font rendering")
 
   # Create and set theme if requested
   if (update_theme) {
