@@ -608,6 +608,12 @@ set_plot_font <- function(font = "Roboto Condensed", size = 18,
   font_loaded <- FALSE
   search_results <- list()
 
+  # Helper function to normalize font names for matching
+  # Removes spaces, hyphens, and converts to lowercase
+  normalize_name <- function(name) {
+    tolower(gsub("[\\s-]", "", name))
+  }
+
   # Helper function to test if font family is available
   test_font <- function(family) {
     families <- sysfonts::font_families()
@@ -633,47 +639,127 @@ set_plot_font <- function(font = "Roboto Condensed", size = 18,
     return(test_font(family))
   }
 
-  # Helper function to search local font directories
-  search_local_fonts <- function(family) {
-    # Common font directories
-    font_dirs <- c(
-      file.path(Sys.getenv("WINDIR"), "Fonts"), # Windows
-      file.path(Sys.getenv("HOME"), ".fonts"), # User fonts
-      "/System/Library/Fonts", # macOS
-      "/Library/Fonts", # macOS
-      "/usr/share/fonts", # Linux
-      "/usr/local/share/fonts" # Linux
-    )
+  # Helper function to get OS-specific font directories
+  get_font_directories <- function() {
+    os_type <- Sys.info()["sysname"]
+    
+    font_dirs <- character()
+    
+    if (os_type == "Windows") {
+      font_dirs <- c(
+        file.path(Sys.getenv("WINDIR"), "Fonts"),
+        file.path(Sys.getenv("LOCALAPPDATA"), "Microsoft", "Windows", "Fonts")
+      )
+    } else if (os_type == "Darwin") {  # macOS
+      font_dirs <- c(
+        "/System/Library/Fonts",
+        "/Library/Fonts",
+        file.path(Sys.getenv("HOME"), "Library", "Fonts"),
+        "/System/Library/Fonts/Supplemental",
+        "/Network/Library/Fonts"
+      )
+    } else {  # Linux and other Unix-like
+      font_dirs <- c(
+        "/usr/share/fonts",
+        "/usr/local/share/fonts",
+        file.path(Sys.getenv("HOME"), ".fonts"),
+        file.path(Sys.getenv("HOME"), ".local", "share", "fonts"),
+        "/usr/share/fonts/truetype",
+        "/usr/share/fonts/opentype"
+      )
+    }
+    
+    # Return only existing directories
+    return(unique(font_dirs[dir.exists(font_dirs)]))
+  }
 
-    # Remove duplicates and non-existent dirs
-    font_dirs <- unique(font_dirs[dir.exists(font_dirs)])
-
+  # Helper function to recursively search font directories
+  search_font_files <- function(dirs, family) {
+    # Normalize the search term
+    normalized_family <- normalize_name(family)
+    
     # Common font file extensions
-    extensions <- c("ttf", "otf", "ttc")
-    pattern <- paste0("(?i)", family, ".*\\.(", paste(extensions, collapse = "|"), ")$")
-
-    # Search for font files
-    for (dir in font_dirs) {
-      font_files <- list.files(dir, pattern = pattern, full.names = TRUE, ignore.case = TRUE)
-
-      if (length(font_files) > 0) {
-        # Try to add the first matching font file
-        tryCatch(
-          {
-            sysfonts::font_add(family = family, regular = font_files[1])
-            if (test_font(family)) {
-              message(" ✓ Added '", family, "' from: ", basename(font_files[1]))
-              return(TRUE)
-            }
-          },
-          error = function(e) {
-            message(" ✗ Failed to add font from ", dir, ": ", e$message)
-          }
-        )
+    extensions <- c("ttf", "otf", "ttc", "dfont")
+    
+    all_fonts <- character()
+    
+    for (dir in dirs) {
+      # Recursively list all font files
+      for (ext in extensions) {
+        pattern <- paste0("\\.", ext, "$")
+        files <- list.files(dir, 
+                           pattern = pattern, 
+                           full.names = TRUE, 
+                           recursive = TRUE,
+                           ignore.case = TRUE)
+        all_fonts <- c(all_fonts, files)
       }
     }
+    
+    # Match fonts by normalized filename
+    matched_fonts <- character()
+    for (font_file in all_fonts) {
+      basename_normalized <- normalize_name(tools::file_path_sans_ext(basename(font_file)))
+      
+      # Check if normalized family name is in the normalized filename
+      if (grepl(normalized_family, basename_normalized, fixed = TRUE)) {
+        matched_fonts <- c(matched_fonts, font_file)
+      }
+    }
+    
+    return(matched_fonts)
+  }
 
-    return(FALSE)
+  # Helper function to search local fonts
+  search_local_fonts <- function(family) {
+    font_dirs <- get_font_directories()
+    
+    if (length(font_dirs) == 0) {
+      message(" ✗ No font directories found")
+      return(FALSE)
+    }
+    
+    message(" → Searching in ", length(font_dirs), " directories...")
+    
+    # Search for matching font files
+    matched_fonts <- search_font_files(font_dirs, family)
+    
+    if (length(matched_fonts) == 0) {
+      message(" ✗ No matching font files found")
+      return(FALSE)
+    }
+    
+    message(" → Found ", length(matched_fonts), " matching font file(s)")
+    
+    # Try to add the first regular font (prioritize "regular" in filename)
+    regular_fonts <- matched_fonts[grepl("regular", basename(matched_fonts), ignore.case = TRUE)]
+    
+    font_to_add <- if (length(regular_fonts) > 0) regular_fonts[1] else matched_fonts[1]
+    
+    # Try to add the font
+    tryCatch(
+      {
+        # Extract the base family name without variant
+        base_name <- tools::file_path_sans_ext(basename(font_to_add))
+        # Remove common variant suffixes
+        base_name <- gsub("-(Regular|Bold|Italic|Light|Medium|Heavy|Black).*$", "", base_name, ignore.case = TRUE)
+        
+        # Use the original family name for consistency
+        sysfonts::font_add(family = family, regular = font_to_add)
+        
+        if (test_font(family)) {
+          message(" ✓ Added '", family, "' from: ", basename(font_to_add))
+          return(TRUE)
+        } else {
+          message(" ✗ Font added but not available in family list")
+          return(FALSE)
+        }
+      },
+      error = function(e) {
+        message(" ✗ Failed to add font: ", e$message)
+        return(FALSE)
+      }
+    )
   }
 
   # Main search process
@@ -713,10 +799,20 @@ set_plot_font <- function(font = "Roboto Condensed", size = 18,
     cat(" No match found. Trying fallbacks...\n")
     for (fb in fallbacks) {
       cat(" Testing fallback:", fb, "\n")
+      
+      # Try system first
       if (check_system_font(fb)) {
         font_family <- fb
         font_loaded <- TRUE
         message(" ✓ Using fallback: ", fb)
+        break
+      }
+      
+      # Try local search
+      if (search_local_fonts(fb)) {
+        font_family <- fb
+        font_loaded <- TRUE
+        message(" ✓ Using fallback: ", fb, " (from local)")
         break
       }
     }
@@ -729,6 +825,7 @@ set_plot_font <- function(font = "Roboto Condensed", size = 18,
   }
 
   # Enable showtext for consistent font rendering
+  # Uncomment if you want to enable showtext
   # showtext::showtext_auto(enable = TRUE)
   # message("✓ Enabled showtext for font rendering")
 
@@ -777,6 +874,7 @@ set_plot_font <- function(font = "Roboto Condensed", size = 18,
   return(invisible(result))
 }
 
+# Helper wrapper for ggplot
 kkplot <- function(...) {
   ggplot(...) +
     guides(x = guide_axis(cap = "both"), y = guide_axis(cap = "both"))
