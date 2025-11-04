@@ -6,7 +6,7 @@ if (!requireNamespace("pacman", quietly = TRUE)) {
 }
 pacman::p_load(
   # Core data manipulation
-  tidyverse, haven, janitor, readxl,
+  tidyverse, haven, janitor, readxl,tinytable,
 
   # Statistical modeling
   modelsummary, brms, quantreg, tidymodels,
